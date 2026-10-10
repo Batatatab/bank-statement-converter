@@ -1,0 +1,22 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environments
+venv/
+env/
+
+# PyInstaller build outputs
+build/
+dist/
+*.spec
+
+# Prevent accidental leak of private statements / exported ledgers
+*.pdf
+*.xlsx
+*.xls
+*.csv
+
+# Editor settings
+.vscode/
+.idea/
