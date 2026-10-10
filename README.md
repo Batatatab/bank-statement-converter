@@ -15,6 +15,12 @@ The tool is designed to extract transaction details from bank statements with di
 - **PDF password support:** Accepts a password for encrypted PDFs supported by the underlying PDF library.
 - **Audit log:** Displays extraction progress, validation results, and warnings.
 - **Desktop GUI:** Provides a graphical interface for selecting input PDFs and output Excel files.
+- 
+AI-Assisted Development
+
+This project was developed with significant assistance from AI tools, including code generation, debugging, and implementation guidance. I am learning programming while building this tool, and AI has been an important part of the development process.
+
+The project is still evolving, and the code and extraction logic require ongoing testing, review, and improvement. Contributions, bug reports, and suggestions are welcome.
 
 ## How It Works
 
