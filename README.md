@@ -33,6 +33,20 @@ The project is still evolving, and the code and extraction logic require ongoing
 
 The application extracts the available transaction data, standardizes it, and checks running balances where the required information is available.
 
+## Balance Verification Logic
+
+The converter uses user-provided inputs and running balance calculations to help verify extracted bank transactions.
+"Annotated bank statement illustrating the extraction and balance verification logic" (docs/images/balance-verification-reference.png)
+
+How it works:
+
+- Inputs: First transaction date, opening balance, and expected closing balance.
+- Extraction: Reads transaction dates, cheque numbers, particulars, debits, credits, and balances from the PDF.
+- Calculation: Subtracts debits and adds credits to the previous balance.
+- Verification: Compares calculated balances with the PDF balances and checks the final balance against the expected closing balance.
+
+Missing values and discrepancies should be flagged for review rather than automatically marked as verified.
+
 ## Technology Stack
 
 - Python
