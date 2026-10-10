@@ -36,7 +36,7 @@ The application extracts the available transaction data, standardizes it, and ch
 ## Balance Verification Logic
 
 The converter uses user-provided inputs and running balance calculations to help verify extracted bank transactions.
-"Annotated bank statement illustrating the extraction and balance verification logic" (docs/images/balance-verification-reference.png)
+"Annotated bank statement illustrating the extraction and balance verification logic" https://github.com/Batatatab/bank-statement-converter/blob/main/IMG-20261011-WA0000.jpg
 
 How it works:
 
