@@ -11,7 +11,7 @@ build/
 dist/
 *.spec
 
-# Prevent accidental leak of private statements / exported ledgers
+
 *.pdf
 *.xlsx
 *.xls
