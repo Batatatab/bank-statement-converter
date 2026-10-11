@@ -140,4 +140,18 @@ This is a **vibecoded project**. I used AI tools extensively to help build the a
 I don't want to present it as perfect or claim that every feature works with every bank statement. There's still plenty to improve.
 
 ---
+## Screenshots
+
+### Main Application
+
+![Bank Statement Converter - Main Window](screenshots/main-window.png)
+
+### Conversion Process
+
+![Conversion Process](screenshots/conversion-process.png)
+
+### Excel Output
+
+![Excel Output](screenshots/excel-output.png)
+
 
