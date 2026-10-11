@@ -15,10 +15,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "dist\BankStatementConverter\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Bank Statement Converter"; Filename: "{app}\BankStatementConverter.exe"; IconFilename: "{app}\app_icon.ico"
-Name: "{autodesktop}\Bank Statement Converter"; Filename: "{app}\BankStatementConverter.exe"; IconFilename: "{app}\app_icon.ico"; Tasks: desktopicon
+Name: "{group}\Bank Statement Converter"; Filename: "{app}\BankStatementConverter.exe"; IconFilename: "{app}\BankStatementConverter.exe"
+Name: "{autodesktop}\Bank Statement Converter"; Filename: "{app}\BankStatementConverter.exe"; IconFilename: "{app}\BankStatementConverter.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\BankStatementConverter.exe"; Description: "{cm:LaunchProgram,Bank Statement Converter}"; Flags: nowait postinstall skipifsilent
