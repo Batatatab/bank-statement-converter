@@ -144,14 +144,14 @@ I don't want to present it as perfect or claim that every feature works with eve
 
 ### Main Application
 
-![Bank Statement Converter - Main Window](screenshots/main-window.png)
+![Main Application](main-window.png)
 
 ### Conversion Process
 
-![Conversion Process](screenshots/conversion-process.png)
+![Main Application](conversion-process.png)
 
 ### Excel Output
 
-![Excel Output](screenshots/excel-output.png)
+![Main Application](excel-output.png)
 
 
