@@ -7,15 +7,37 @@ from converter_engine import (
     clean_float,
     export_to_excel_styled,
 )
+from optimizer import (
+    dispatch_to_main_thread,
+    get_asset_path,
+    setup_windows_environment,
+)
+
+# Apply Windows XP high-DPI scaling and AppUserModelID before window creation
+setup_windows_environment("sharva.bankstatementconverter.1.0")
+
+# Classic Windows XP Palette
+XP_BG = "#ECE9D8"
+XP_BORDER = "#7F9DB9"
+XP_TEXT = "#000000"
+XP_FONT = ("Tahoma", 8)
+XP_FONT_BOLD = ("Tahoma", 8, "bold")
+XP_FONT_TITLE = ("Tahoma", 9, "bold")
+XP_FONT_HINT = ("Tahoma", 7)
 
 
 class App:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("Bank Statement to Standard Excel Converter")
-        self.root.geometry("820x760")
-        self.root.minsize(760, 680)
+        self.root.title("Bank Statement to Excel Converter")
+        self.root.geometry("690x650")
+        self.root.minsize(650, 590)
+        self.root.configure(bg=XP_BG)
+
+        # Apply custom icon via asset path resolver
+        self._icon_img = None
+        self._set_icon()
 
         self.account_name = tk.StringVar()
         self.account_no = tk.StringVar()
@@ -26,125 +48,195 @@ class App:
         self.opening_bal = tk.StringVar()
         self.closing_bal = tk.StringVar()
 
-        self._apply_theme()
         self._build_ui()
 
-    def _apply_theme(self):
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure(".", font=("Segoe UI", 9))
-        style.configure("TLabelframe", background="#ffffff", relief="solid", borderwidth=1)
-        style.configure("TLabelframe.Label", font=("Segoe UI", 9, "bold"), foreground="#1F497D", background="#ffffff")
-        style.configure("TButton", font=("Segoe UI", 9, "bold"), padding=5)
-        style.configure("Action.TButton", font=("Segoe UI", 10, "bold"), background="#1F497D", foreground="#ffffff")
-        style.map("Action.TButton", background=[("active", "#16365C")])
+    def _set_icon(self):
+        for candidate in ["app_icon.ico", "app_icon.png", "icon.ico", "icon.png"]:
+            full_path = get_asset_path(candidate)
+            if os.path.exists(full_path):
+                try:
+                    if candidate.endswith(".ico"):
+                        self.root.iconbitmap(full_path)
+                    else:
+                        self._icon_img = tk.PhotoImage(file=full_path)
+                        self.root.iconphoto(True, self._icon_img)
+                    break
+                except Exception:
+                    pass
+
+    def _make_entry(self, parent, textvariable, width=20, show=None):
+        return tk.Entry(
+            parent,
+            textvariable=textvariable,
+            width=width,
+            show=show,
+            font=XP_FONT,
+            bg="#FFFFFF",
+            fg=XP_TEXT,
+            relief="sunken",
+            bd=1,
+            highlightthickness=1,
+            highlightcolor=XP_BORDER,
+            highlightbackground=XP_BORDER,
+        )
+
+    def _make_button(self, parent, text, command, width=None):
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            width=width,
+            font=XP_FONT,
+            bg=XP_BG,
+            fg=XP_TEXT,
+            relief="raised",
+            bd=2,
+            activebackground="#DFDCC9",
+            padx=6,
+            pady=2,
+        )
 
     def _build_ui(self):
-        canvas_bg = ttk.Frame(self.root, padding=14)
-        canvas_bg.pack(fill=tk.BOTH, expand=True)
+        main = tk.Frame(self.root, bg=XP_BG, padx=8, pady=8)
+        main.pack(fill=tk.BOTH, expand=True)
 
-        # 1. Statement File Picker
-        file_frame = ttk.LabelFrame(canvas_bg, text=" 1. Bank Statement File ", padding=10)
-        file_frame.pack(fill=tk.X, pady=(0, 8))
-
-        ttk.Label(file_frame, text="Select PDF Statement:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, sticky=tk.W)
-        ttk.Entry(file_frame, textvariable=self.pdf_path, width=65).grid(row=1, column=0, padx=(0, 8), sticky=tk.EW)
-        ttk.Button(file_frame, text="Browse...", command=self._browse_pdf).grid(row=1, column=1)
-
-        pw_row = ttk.Frame(file_frame)
-        pw_row.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(6, 0))
-        ttk.Label(pw_row, text="PDF Password (if protected):").pack(side=tk.LEFT)
-        ttk.Entry(pw_row, textvariable=self.pdf_password, show="*", width=16).pack(side=tk.LEFT, padx=8)
-
-        file_frame.columnconfigure(0, weight=1)
-
-        # 2. Calibration Anchors with In-GUI Definitions
-        anchor_frame = ttk.LabelFrame(canvas_bg, text=" 2. Calibration & Verification Anchors ", padding=10)
-        anchor_frame.pack(fill=tk.X, pady=(0, 8))
-
-        # Anchor Inputs Grid
-        inputs_grid = ttk.Frame(anchor_frame)
-        inputs_grid.pack(fill=tk.X)
-
-        # First Tx Date
-        f_box1 = ttk.Frame(inputs_grid)
-        f_box1.grid(row=0, column=0, sticky=tk.W, padx=(0, 16))
-        ttk.Label(f_box1, text="First Tx Date *", font=("Segoe UI", 9, "bold"), foreground="#1F497D").pack(anchor=tk.W)
-        ttk.Entry(f_box1, textvariable=self.first_tx_date, width=20, font=("Segoe UI", 10)).pack(anchor=tk.W, pady=(2, 0))
-
-        # Opening Balance
-        f_box2 = ttk.Frame(inputs_grid)
-        f_box2.grid(row=0, column=1, sticky=tk.W, padx=(0, 16))
-        ttk.Label(f_box2, text="Opening Balance (Optional)", font=("Segoe UI", 9, "bold"), foreground="#1F497D").pack(anchor=tk.W)
-        ttk.Entry(f_box2, textvariable=self.opening_bal, width=22, font=("Segoe UI", 10)).pack(anchor=tk.W, pady=(2, 0))
-
-        # Expected Closing Balance
-        f_box3 = ttk.Frame(inputs_grid)
-        f_box3.grid(row=0, column=2, sticky=tk.W)
-        ttk.Label(f_box3, text="Expected Closing Balance *", font=("Segoe UI", 9, "bold"), foreground="#1F497D").pack(anchor=tk.W)
-        ttk.Entry(f_box3, textvariable=self.closing_bal, width=22, font=("Segoe UI", 10)).pack(anchor=tk.W, pady=(2, 0))
-
-        # Inline Field Definitions
-        guide_box = tk.Text(anchor_frame, height=4, bg="#F2F4F7", relief="flat", font=("Segoe UI", 8), fg="#333333", padx=8, pady=6)
-        guide_box.pack(fill=tk.X, pady=(8, 0))
-        guide_text = (
-            "• First Tx Date: Date on the top-most transaction in the statement (e.g. 07/12/2023 or 2023-12-07). Locks table columns.\n"
-            "• Opening Balance: Balance before first transaction. (Optional — if blank, auto-calculated from first transaction).\n"
-            "• Expected Closing Balance: Ending balance printed on statement. Verifies 100% ledger accuracy against your bank."
+        # 1. Statement File Group
+        f_group = tk.LabelFrame(
+            main, text=" Statement File ", font=XP_FONT_BOLD, bg=XP_BG, fg=XP_TEXT, bd=2, relief="groove"
         )
-        guide_box.insert(tk.END, guide_text)
-        guide_box.config(state=tk.DISABLED)
+        f_group.pack(fill=tk.X, pady=(0, 6), padx=2, ipadx=4, ipady=4)
 
-        # 3. Output Excel File Destination
-        out_frame = ttk.LabelFrame(canvas_bg, text=" 3. Excel Output Destination ", padding=10)
-        out_frame.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(f_group, text="PDF File:", font=XP_FONT, bg=XP_BG).grid(row=0, column=0, sticky="w", padx=6, pady=2)
+        e_pdf = self._make_entry(f_group, self.pdf_path, width=54)
+        e_pdf.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
+        self._make_button(f_group, "Browse...", self._browse_pdf, width=10).grid(row=0, column=2, padx=6, pady=2)
 
-        ttk.Label(out_frame, text="Save Standardized Excel As:").grid(row=0, column=0, sticky=tk.W)
-        ttk.Entry(out_frame, textvariable=self.out_path, width=65).grid(row=1, column=0, padx=(0, 8), sticky=tk.EW)
-        ttk.Button(out_frame, text="Save As...", command=self._browse_output).grid(row=1, column=1)
-        out_frame.columnconfigure(0, weight=1)
+        tk.Label(f_group, text="Password:", font=XP_FONT, bg=XP_BG).grid(row=1, column=0, sticky="w", padx=6, pady=2)
+        self._make_entry(f_group, self.pdf_password, width=16, show="*").grid(row=1, column=1, sticky="w", padx=4, pady=2)
+        f_group.columnconfigure(1, weight=1)
 
-        # Optional Metadata
-        meta_row = ttk.Frame(out_frame)
-        meta_row.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
-        ttk.Label(meta_row, text="Account Holder (Opt):").pack(side=tk.LEFT)
-        ttk.Entry(meta_row, textvariable=self.account_name, width=20).pack(side=tk.LEFT, padx=(4, 16))
-        ttk.Label(meta_row, text="Account No (Opt):").pack(side=tk.LEFT)
-        ttk.Entry(meta_row, textvariable=self.account_no, width=20).pack(side=tk.LEFT, padx=4)
-
-        # Convert Button
-        self.btn = ttk.Button(canvas_bg, text="▶  Convert, Reconcile & Verify Closing Balance", style="Action.TButton", command=self._start)
-        self.btn.pack(fill=tk.X, pady=(2, 8))
-
-        # 4. Closing Balance Verification Result Card
-        self.card_frame = tk.Frame(canvas_bg, bg="#E9ECEF", bd=1, relief="solid", padx=10, pady=8)
-        self.card_frame.pack(fill=tk.X, pady=(0, 8))
-
-        self.card_title = tk.Label(self.card_frame, text="RECONCILIATION VERDICT: WAITING TO RUN", font=("Segoe UI", 10, "bold"), bg="#E9ECEF", fg="#495057")
-        self.card_title.pack(anchor=tk.W)
-
-        self.card_details = tk.Label(
-            self.card_frame,
-            text="Calculated Balance: --  |  Expected Balance: --  |  Variance: --",
-            font=("Segoe UI", 9),
-            bg="#E9ECEF",
-            fg="#495057"
+        # 2. Calibration Anchors Group
+        a_group = tk.LabelFrame(
+            main, text=" Calibration Anchors ", font=XP_FONT_BOLD, bg=XP_BG, fg=XP_TEXT, bd=2, relief="groove"
         )
-        self.card_details.pack(anchor=tk.W, pady=(2, 0))
+        a_group.pack(fill=tk.X, pady=(0, 6), padx=2, ipadx=4, ipady=4)
 
-        # 5. Execution Log Console
-        log_frame = ttk.LabelFrame(canvas_bg, text=" Audit & Execution Log ", padding=8)
-        log_frame.pack(fill=tk.BOTH, expand=True)
+        anchor_grid = tk.Frame(a_group, bg=XP_BG)
+        anchor_grid.pack(fill=tk.X, padx=4, pady=2)
 
-        self.log_box = tk.Text(log_frame, height=7, font=("Consolas", 9), bg="#f8f9fa", relief="solid", borderwidth=1)
-        self.log_box.pack(fill=tk.BOTH, expand=True)
+        # Field 1: First Transaction Date
+        tk.Label(anchor_grid, text="First Tx Date:", font=XP_FONT_BOLD, bg=XP_BG).grid(row=0, column=0, sticky="w", padx=4)
+        tk.Label(anchor_grid, text="e.g. 01-05-2024 or 01/05/2024", font=XP_FONT_HINT, fg="#555555", bg=XP_BG).grid(row=1, column=0, sticky="w", padx=4)
+        self._make_entry(anchor_grid, self.first_tx_date, width=22).grid(row=2, column=0, sticky="w", padx=4, pady=(2, 4))
 
-        self.progress = ttk.Progressbar(canvas_bg, mode="indeterminate")
-        self.progress.pack(fill=tk.X, pady=(4, 0))
+        # Field 2: Opening Balance
+        tk.Label(anchor_grid, text="Opening Bal (Opt):", font=XP_FONT, bg=XP_BG).grid(row=0, column=1, sticky="w", padx=8)
+        tk.Label(anchor_grid, text="e.g. 10000.00 (or leave blank)", font=XP_FONT_HINT, fg="#555555", bg=XP_BG).grid(row=1, column=1, sticky="w", padx=8)
+        self._make_entry(anchor_grid, self.opening_bal, width=20).grid(row=2, column=1, sticky="w", padx=8, pady=(2, 4))
+
+        # Field 3: Expected Closing Balance
+        tk.Label(anchor_grid, text="Expected Closing Bal:", font=XP_FONT_BOLD, bg=XP_BG).grid(row=0, column=2, sticky="w", padx=4)
+        tk.Label(anchor_grid, text="e.g. 24500.75", font=XP_FONT_HINT, fg="#555555", bg=XP_BG).grid(row=1, column=2, sticky="w", padx=4)
+        self._make_entry(anchor_grid, self.closing_bal, width=20).grid(row=2, column=2, sticky="w", padx=4, pady=(2, 4))
+
+        # 3. Output Destination Group
+        o_group = tk.LabelFrame(
+            main, text=" Destination & Metadata ", font=XP_FONT_BOLD, bg=XP_BG, fg=XP_TEXT, bd=2, relief="groove"
+        )
+        o_group.pack(fill=tk.X, pady=(0, 6), padx=2, ipadx=4, ipady=4)
+
+        tk.Label(o_group, text="Save As:", font=XP_FONT, bg=XP_BG).grid(row=0, column=0, sticky="w", padx=6, pady=2)
+        e_out = self._make_entry(o_group, self.out_path, width=54)
+        e_out.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
+        self._make_button(o_group, "Save As...", self._browse_output, width=10).grid(row=0, column=2, padx=6, pady=2)
+
+        meta_frame = tk.Frame(o_group, bg=XP_BG)
+        meta_frame.grid(row=1, column=0, columnspan=3, sticky="w", padx=6, pady=(4, 0))
+        tk.Label(meta_frame, text="Account Name (Opt):", font=XP_FONT, bg=XP_BG).pack(side="left")
+        self._make_entry(meta_frame, self.account_name, width=18).pack(side="left", padx=(4, 12))
+        tk.Label(meta_frame, text="Account No (Opt):", font=XP_FONT, bg=XP_BG).pack(side="left")
+        self._make_entry(meta_frame, self.account_no, width=18).pack(side="left", padx=4)
+        o_group.columnconfigure(1, weight=1)
+
+        # Action Button
+        self.btn = tk.Button(
+            main,
+            text="Convert and Reconcile",
+            command=self._start,
+            font=XP_FONT_TITLE,
+            bg=XP_BG,
+            fg=XP_TEXT,
+            relief="raised",
+            bd=2,
+            activebackground="#DFDCC9",
+            pady=4,
+        )
+        self.btn.pack(fill=tk.X, pady=(2, 6), padx=2)
+
+        # 4. Reconciliation Verdict Card
+        self.verdict_frame = tk.Frame(main, bg="#FFFFFF", bd=2, relief="sunken", padx=6, pady=4)
+        self.verdict_frame.pack(fill=tk.X, pady=(0, 6), padx=2)
+
+        self.verdict_label = tk.Label(
+            self.verdict_frame,
+            text="Reconciliation Verdict: Ready",
+            font=XP_FONT_BOLD,
+            bg="#FFFFFF",
+            fg="#444444",
+            anchor="w",
+        )
+        self.verdict_label.pack(fill=tk.X)
+
+        self.verdict_sub = tk.Label(
+            self.verdict_frame,
+            text="Calculated: --   |   Expected: --   |   Difference: --",
+            font=XP_FONT,
+            bg="#FFFFFF",
+            fg="#666666",
+            anchor="w",
+        )
+        self.verdict_sub.pack(fill=tk.X)
+
+        # 5. Activity Log
+        log_group = tk.LabelFrame(
+            main, text=" Activity Log ", font=XP_FONT_BOLD, bg=XP_BG, fg=XP_TEXT, bd=2, relief="groove"
+        )
+        log_group.pack(fill=tk.BOTH, expand=True, padx=2, pady=(0, 4))
+
+        self.log_box = tk.Text(
+            log_group,
+            height=7,
+            font=("Lucida Console", 8),
+            bg="#FFFFFF",
+            fg="#000000",
+            relief="sunken",
+            bd=1,
+            highlightthickness=0,
+        )
+        self.log_box.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        # 6. Status Bar (No static green box; progress bar only appears while working)
+        status_bar = tk.Frame(main, bg=XP_BG, bd=1, relief="sunken")
+        status_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(2, 0))
+
+        self.status_text = tk.Label(
+            status_bar,
+            text="Ready",
+            font=XP_FONT,
+            bg=XP_BG,
+            fg=XP_TEXT,
+            anchor="w",
+            padx=4,
+        )
+        self.status_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.progress = ttk.Progressbar(status_bar, mode="indeterminate", length=130)
 
     def _log(self, text):
-        self.log_box.insert(tk.END, text + "\n")
-        self.log_box.see(tk.END)
+        def _append():
+            self.log_box.insert(tk.END, text + "\n")
+            self.log_box.see(tk.END)
+        dispatch_to_main_thread(self.root, _append)
 
     def _browse_pdf(self):
         f = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")])
@@ -168,31 +260,31 @@ class App:
         acc_no = self.account_no.get().strip()
 
         if not pdf or not os.path.exists(pdf):
-            messagebox.showerror("Missing PDF", "Please select a valid bank statement PDF file.")
+            messagebox.showerror("Error", "Please select a valid PDF file.")
             return
         if not date_input:
-            messagebox.showerror("Missing Anchor Date", "Please enter the First Transaction Date (e.g. 07/12/2023 or 2023-12-07).")
+            messagebox.showerror("Input Required", "Please enter the First Transaction Date.")
             return
         if not out:
-            messagebox.showerror("Missing Destination", "Please choose where to save the Excel file.")
+            messagebox.showerror("Error", "Please select an output destination.")
             return
 
         op_bal = clean_float(op_bal_input) if op_bal_input else None
         expected_cl_bal = clean_float(cl_bal_input) if cl_bal_input else None
 
         self.btn.config(state=tk.DISABLED)
+        self.status_text.config(text="Processing statement...")
+        self.progress.pack(side=tk.RIGHT, padx=2, pady=1)
         self.progress.start(10)
         self.log_box.delete("1.0", tk.END)
 
-        # Reset Result Card
-        self.card_frame.config(bg="#E9ECEF")
-        self.card_title.config(text="PROCESSING RECONCILIATION...", fg="#495057", bg="#E9ECEF")
-        self.card_details.config(text="Parsing transactions and calculating double-entry running balances...", fg="#495057", bg="#E9ECEF")
+        self.verdict_label.config(text="Processing...", fg="#000080")
+        self.verdict_sub.config(text="Parsing PDF tables and reconciling running balances...")
 
         threading.Thread(
             target=self._run,
             args=(pdf, out, pw, date_input, op_bal, expected_cl_bal, acc_name, acc_no),
-            daemon=True
+            daemon=True,
         ).start()
 
     def _run(self, pdf, out, pw, date_input, op_bal, expected_cl_bal, acc_name, acc_no):
@@ -203,15 +295,16 @@ class App:
                 password=pw,
                 first_tx_date=date_input,
                 opening_bal=op_bal,
-                expected_closing_bal=expected_cl_bal
+                expected_closing_bal=expected_cl_bal,
             )
 
             if df.empty:
                 self._log("0 transactions parsed.")
-                self.card_frame.config(bg="#FFF3CD")
-                self.card_title.config(text="WARNING: 0 TRANSACTIONS DETECTED", fg="#856404", bg="#FFF3CD")
-                self.card_details.config(text="Please verify the First Transaction Date matches your PDF.", fg="#856404", bg="#FFF3CD")
-                messagebox.showwarning("Warning", "No transactions detected.")
+                def _on_zero():
+                    self.verdict_label.config(text="Verdict: 0 Transactions Found", fg="#800000")
+                    self.verdict_sub.config(text="Verify that the First Transaction Date matches the statement.")
+                    messagebox.showwarning("Warning", "No transactions detected.")
+                dispatch_to_main_thread(self.root, _on_zero)
                 return
 
             export_to_excel_styled(df, out, account_name=acc_name, account_no=acc_no)
@@ -220,69 +313,69 @@ class App:
             final_bal = v_info["final_bal"]
             diff = v_info["diff"]
             matches = v_info["closing_matches"]
-            tx_count = v_info["tx_count"]
+            tx_count = v_info.get("tx_count", len(df) - 1)
 
-            if expected_cl_bal is not None:
-                if matches:
-                    # Closing Balance Matches
-                    self.card_frame.config(bg="#D4EDDA")
-                    self.card_title.config(
-                        text=f"✔  SUCCESS: CLOSING BALANCE MATCHES (100% RECONCILED)",
-                        fg="#155724",
-                        bg="#D4EDDA"
-                    )
-                    self.card_details.config(
-                        text=f"Calculated: ₹{final_bal:,.2f}  |  Expected: ₹{expected_cl_bal:,.2f}  |  Variance: ₹{diff:,.2f} (EXACT MATCH)  |  Transactions: {tx_count}",
-                        fg="#155724",
-                        bg="#D4EDDA"
-                    )
-                    self._log(f"VERDICT: Closing Balance matches exactly (₹{final_bal:,.2f}). 0.00 discrepancy.")
-                    messagebox.showinfo(
-                        "Reconciliation Success",
-                        f"SUCCESS: Statement 100% Reconciled!\n\n"
-                        f"• Calculated Closing Balance: ₹{final_bal:,.2f}\n"
-                        f"• Expected Closing Balance:   ₹{expected_cl_bal:,.2f}\n"
-                        f"• Variance / Difference:     ₹{diff:,.2f} (MATCH)\n"
-                        f"• Total Transactions:        {tx_count}"
-                    )
+            def _update_ui_success():
+                if expected_cl_bal is not None:
+                    if matches:
+                        self.verdict_label.config(
+                            text=f"Verdict: MATCH (100% Reconciled - {tx_count} Transactions)",
+                            fg="#006600",
+                        )
+                        self.verdict_sub.config(
+                            text=f"Calculated: {final_bal:,.2f}   |   Expected: {expected_cl_bal:,.2f}   |   Difference: {diff:,.2f}"
+                        )
+                        messagebox.showinfo(
+                            "Reconciliation Success",
+                            f"Closing Balance Matches!\n\n"
+                            f"Calculated:  {final_bal:,.2f}\n"
+                            f"Expected:    {expected_cl_bal:,.2f}\n"
+                            f"Difference:  {diff:,.2f}",
+                        )
+                    else:
+                        self.verdict_label.config(
+                            text=f"Verdict: MISMATCH (Difference: {diff:,.2f})",
+                            fg="#A00000",
+                        )
+                        self.verdict_sub.config(
+                            text=f"Calculated: {final_bal:,.2f}   |   Expected: {expected_cl_bal:,.2f}   |   Difference: {diff:,.2f}"
+                        )
+                        messagebox.showwarning(
+                            "Balance Mismatch",
+                            f"Closing Balance Mismatch!\n\n"
+                            f"Calculated:  {final_bal:,.2f}\n"
+                            f"Expected:    {expected_cl_bal:,.2f}\n"
+                            f"Difference:  {diff:,.2f}",
+                        )
                 else:
-                    # Closing Balance Mismatch
-                    self.card_frame.config(bg="#F8D7DA")
-                    self.card_title.config(
-                        text=f"✖  MISMATCH DETECTED: CLOSING BALANCE DOES NOT MATCH",
-                        fg="#721C24",
-                        bg="#F8D7DA"
+                    self.verdict_label.config(
+                        text=f"Verdict: Complete ({tx_count} Transactions)", fg="#000080"
                     )
-                    self.card_details.config(
-                        text=f"Calculated: ₹{final_bal:,.2f}  |  Expected: ₹{expected_cl_bal:,.2f}  |  Difference: ₹{diff:,.2f}  |  Transactions: {tx_count}",
-                        fg="#721C24",
-                        bg="#F8D7DA"
+                    self.verdict_sub.config(
+                        text=f"Final Balance: {final_bal:,.2f}   |   Expected: Not Provided"
                     )
-                    self._log(f"VERDICT: MISMATCH DETECTED! Expected ₹{expected_cl_bal:,.2f}, Calculated ₹{final_bal:,.2f} (Diff: ₹{diff:,.2f})")
-                    messagebox.showwarning(
-                        "Closing Balance Mismatch",
-                        f"ATTENTION: Closing Balance Mismatch!\n\n"
-                        f"• Calculated Final Balance: ₹{final_bal:,.2f}\n"
-                        f"• Expected Closing Balance: ₹{expected_cl_bal:,.2f}\n"
-                        f"• Discrepancy / Difference: ₹{diff:,.2f}\n\n"
-                        "Check for potential typos in the Opening Balance or individual transaction amounts."
+                    messagebox.showinfo(
+                        "Complete", f"Exported {tx_count} transactions.\nFinal Balance: {final_bal:,.2f}"
                     )
-            else:
-                self.card_frame.config(bg="#D1ECF1")
-                self.card_title.config(text=f"COMPLETED (No Expected Closing Balance Provided)", fg="#0C5460", bg="#D1ECF1")
-                self.card_details.config(text=f"Final Ledger Balance: ₹{final_bal:,.2f}  |  Transactions: {tx_count}", fg="#0C5460", bg="#D1ECF1")
-                self._log(f"Completed. Final calculated balance is ₹{final_bal:,.2f}.")
-                messagebox.showinfo("Export Complete", f"Exported {tx_count} transactions.\nFinal Balance: ₹{final_bal:,.2f}")
+
+            dispatch_to_main_thread(self.root, _update_ui_success)
 
         except Exception as e:
-            self._log(f"ERROR: {str(e)}")
-            self.card_frame.config(bg="#F8D7DA")
-            self.card_title.config(text=f"EXECUTION ERROR", fg="#721C24", bg="#F8D7DA")
-            self.card_details.config(text=str(e), fg="#721C24", bg="#F8D7DA")
-            messagebox.showerror("Execution Error", str(e))
+            err_msg = str(e)
+            self._log(f"ERROR: {err_msg}")
+            def _on_error():
+                self.verdict_label.config(text="Verdict: Execution Error", fg="#A00000")
+                self.verdict_sub.config(text=err_msg)
+                messagebox.showerror("Execution Error", err_msg)
+            dispatch_to_main_thread(self.root, _on_error)
+
         finally:
-            self.progress.stop()
-            self.btn.config(state=tk.NORMAL)
+            def _cleanup():
+                self.progress.stop()
+                self.progress.pack_forget()
+                self.status_text.config(text="Ready")
+                self.btn.config(state=tk.NORMAL)
+            dispatch_to_main_thread(self.root, _cleanup)
 
 
 if __name__ == "__main__":

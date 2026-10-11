@@ -1,11 +1,6 @@
 from datetime import date, datetime
 import re
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
-import pandas as pd
-import pdfplumber
 
-# ----------------- OCR HEALING & DATE MAPS -----------------
 MONTH_NAME_TO_NUM = {
     "jan": 1,
     "january": 1,
@@ -36,41 +31,71 @@ MONTH_NAME_TO_NUM = {
 DECIMAL_REGEX = re.compile(r"^[-+]?[\d,]+\.\d{2}$")
 CHEQUE_6DIGIT_REGEX = re.compile(r"^\d{6}$")
 
+# Bank statement summary, period total, and watermark patterns
 FOOTER_AND_TOTAL_PATTERNS = [
-    r"\bTOTAL\b",
+    r"\bPERIOD\s*TOTAL\b",
     r"\bGRAND\s*TOTAL\b",
     r"\bSUB\s*TOTAL\b",
+    r"\bPAGE\s*TOTAL\b",
     r"\bTOTAL\s*DEBIT\b",
     r"\bTOTAL\s*CREDIT\b",
+    r"\bTOTAL\s*WITHDRAWAL\b",
+    r"\bTOTAL\s*DEPOSIT\b",
     r"\bSTATEMENT\s*PERIOD\b",
     r"\bSTATEMENT\s*OF\s*ACCOUNT\b",
     r"\bCUSTOMER\s*ID\b",
     r"\bACCOUNT\s*NO\b",
     r"\bREGISTERED\s*OFFICE\b",
-    r"\bSTATEMENT\s*FOR\s*\(TILL\b",
-    r"\bSCHEME\s*OPENING\s*POINTS\b",
-    r"\bPOINTS\s*ADJUSTMENT\b",
-    r"\bREWARD\s*POINTS\b",
     r"\bPAGE\s*(?:NO)?\.?\s*\d+\s*(?:OF\s*\d+)?",
     r"\bCOMPUTER\s*GENERATED\b",
     r"\bEND\s*OF\s*STATEMENT\b",
+    r"\bHTML\s*TO\s*PDF\b",
+    r"\bDEVELOPER-FRIENDLY\b",
+    r"\bEXPLORE\s*OUR\b",
+]
+
+# Statutory disclosures, legal legends, and non-transaction footers
+ANNEXURE_KEYWORDS = [
+    r"\bACCOUNT\s*RELATED\s*OTHER\s*INFORMATION\b",
+    r"\bLEGENDS\s*(?:FOR\s*TRANSACTIONS)?\b",
+    r"\bNOMINEE\s*NAME\b",
+    r"\bAUTHORISED\s*SIGNATORY\b",
+    r"\bINCOME\s*TAX\s*ACT\b",
+    r"\bFORM\s*15[GH]\b",
+    r"\bVAT/MAT/NFS\b",
+    r"\bCASH\s*WITHDRAWAL\s*AT\s*OTHER\s*BANK\b",
+    r"\bINTERNET\s*FUNDS\s*TRANSFER\b",
+    r"\bREAL\s*TIME\s*GROSS\s*SETTLEMENT\b",
+    r"\bNATIONAL\s*ELECTRONIC\s*FUND\s*TRANSFER\b",
+    r"\bTERMS\s*(?:AND|&)\s*CONDITIONS\b",
+    r"\bIMPORTANT\s*INFORMATION\b",
+    r"\bCUSTOMER\s*CARE\b",
+    r"\bPLEASE\s*NOTE\b",
+    r"\bPLEASE\s*DO\s*NOT\s*SHARE\b",
     r"\bUNLESS\s*A\s*CONSTITUENT\b",
-    r"\bPLEASE\s*DO\s*NOT\s*SHARE\s*YOUR\s*ATM\b",
+]
+
+OPENING_BAL_PATTERNS = [
+    r"\bop(?:en(?:ing)?)?\.?\s*bal(?:ance)?\.?\b",
+    r"\b(?:to\s+|by\s+)?bal(?:ance)?\.?\s*b[/\.]?d\b",
+    r"\b(?:to\s+|by\s+)?bal(?:ance)?\.?\s*b[/\.]?f(?:wd)?\b",
+    r"\bb[/\.]?[df](?:wd)?\s*bal(?:ance)?\.?\b",
+    r"\b(?:to\s+|by\s+)?(?:bal(?:ance)?\.?\s*)?brought\s*(?:down|forward)\b",
+    r"\bbalance\s*forward(?:ed)?\b",
+    r"\b(?:start(?:ing)?|initial|opening\s*book)\s*bal(?:ance)?\.?\b",
+]
+
+CLOSING_BAL_PATTERNS = [
+    r"\bcl(?:o(?:s(?:e|ing)?)?)?\.?\s*bal(?:ance)?\.?\b",
+    r"\b(?:to\s+|by\s+)?bal(?:ance)?\.?\s*c[/\.]?d\b",
+    r"\b(?:to\s+|by\s+)?bal(?:ance)?\.?\s*c[/\.]?f(?:wd)?\b",
+    r"\bc[/\.]?[df](?:wd)?\s*bal(?:ance)?\.?\b",
+    r"\b(?:to\s+|by\s+)?(?:bal(?:ance)?\.?\s*)?carried\s*(?:down|forward)\b",
+    r"\b(?:end(?:ing)?|final|closing\s*book)\s*bal(?:ance)?\.?\b",
 ]
 
 HEADER_KEYWORDS = {
-    "serial_no": [
-        "serial no",
-        "serial number",
-        "sl no",
-        "sr no",
-        "s.no",
-        "sr.no",
-        "sl.no",
-        "s no",
-        "sl",
-        "sr",
-    ],
+    "serial_no": ["sl no", "sr no", "s.no", "sr.no", "sl.no", "s no"],
     "val_date": [
         "value date",
         "value dt",
@@ -89,19 +114,15 @@ HEADER_KEYWORDS = {
     ],
     "chq_ref": [
         "reference no",
-        "reference number",
         "ref no",
         "ref. no.",
         "reference",
         "cheque/reference#",
-        "cheque/reference",
         "cheque number",
         "chq no",
         "cheque no",
         "cheque",
         "chq / ref",
-        "chq./ref.no.",
-        "ref/cheque",
     ],
     "particulars": [
         "description",
@@ -112,24 +133,26 @@ HEADER_KEYWORDS = {
         "details",
     ],
     "dr": [
+        "debit (receipts)",
         "debited amount",
         "debited",
         "debit",
         "withdrawal",
-        "dr",
         "dr amount",
-        "withdrawal amt",
         "withdrawals",
+        "receipts",
+        "dr",
     ],
     "cr": [
+        "credit (payments)",
         "credited amount",
         "credited",
         "credit",
         "deposit",
-        "cr",
         "cr amount",
-        "deposit amt",
         "deposits",
+        "payments",
+        "cr",
     ],
     "bal": ["balance", "bal", "closing balance", "running balance"],
 }
@@ -146,14 +169,71 @@ def _match_keyword(text: str, keywords: list[str]) -> bool:
     return False
 
 
-def _heal_ocr_date(s: str) -> str:
-    s = re.sub(r"\b2[oO](\d{2})\b", r"20\1", s)
-    s = re.sub(r"\b(\d{2})2[oO]\b", r"\g<1>20", s)
-    s = re.sub(r"(?<=[/\.\-\s])[oO](\d)", r"0\1", s)
-    s = re.sub(r"(\d)[oO](?=[/\.\-\s])", r"\g<1>0", s)
-    s = re.sub(r"\b[oO](\d)(?=[/\.\-\s])", r"0\1", s)
-    s = re.sub(r"(?<=[/\.\-\s])[oO]\b", r"0", s)
-    return s
+def is_opening_balance_line(text: str) -> bool:
+    if not text:
+        return False
+    return any(re.search(pat, text, re.IGNORECASE) for pat in OPENING_BAL_PATTERNS)
+
+
+def is_closing_balance_line(text: str) -> bool:
+    if not text:
+        return False
+    return any(re.search(pat, text, re.IGNORECASE) for pat in CLOSING_BAL_PATTERNS)
+
+
+def is_annexure_or_legend_line(text: str) -> bool:
+    if not text:
+        return False
+    return any(re.search(pat, text, re.IGNORECASE) for pat in ANNEXURE_KEYWORDS)
+
+
+def is_total_summary_line(line_full_text: str, line_words: list, decimal_items: list) -> bool:
+    if not line_full_text:
+        return False
+    clean = line_full_text.strip().upper()
+
+    if re.match(r"^(?:GRAND\s+|PERIOD\s+|SUB\s+|PAGE\s+|STATEMENT\s+)?TOTAL(?:\s*[:\-])?\b", clean):
+        return True
+
+    first_word = line_words[0]["text"].strip().upper() if line_words else ""
+    if first_word in ("TOTAL", "TOTAL:", "TOTAL-"):
+        return True
+
+    if re.search(r"\bTOTAL\b", clean) and len(decimal_items) >= 2:
+        if not re.search(r"\b(?:PVT|LTD|STORE|PETROL|PUMP|SERVICES|EXPENSE|PAYMENT)\b", clean):
+            return True
+
+    return False
+
+
+def clean_float(val) -> float:
+    if val is None:
+        return 0.0
+    s = str(val).strip()
+    if not s or s == "-":
+        return 0.0
+    match = re.search(r"[-+]?[\d,]+\.\d{2,3}(?:\s*(?:CR|DR))?", s, re.IGNORECASE)
+    if not match:
+        return 0.0
+    target = match.group(0).replace(",", "").strip()
+    is_negative = target.startswith("-") or "(DR)" in target.upper() or "OD" in target.upper()
+    s_clean = re.sub(r"[^\d\.]", "", target)
+    try:
+        f = float(s_clean)
+        return -f if is_negative else f
+    except ValueError:
+        return 0.0
+
+
+def extract_strict_decimal(text: str) -> float:
+    c = str(text).replace(",", "").replace("+", "").replace("₹", "").replace("Rs.", "").strip()
+    c = re.sub(r"(?:CR|DR)$", "", c, flags=re.IGNORECASE).strip()
+    if re.match(r"^[-+]?\d+\.\d{2,3}$", c):
+        try:
+            return abs(round(float(c), 2))
+        except ValueError:
+            return 0.0
+    return 0.0
 
 
 def parse_date_flexible(val, default_year: int = None) -> date | None:
@@ -161,17 +241,11 @@ def parse_date_flexible(val, default_year: int = None) -> date | None:
         return None
     if isinstance(val, (datetime, date)):
         return val.date() if isinstance(val, datetime) else val
-
     s = str(val).strip()
     if not s:
         return None
-
-    s = re.sub(
-        r"[T\s]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?.*$", "", s, flags=re.IGNORECASE
-    )
-    s = re.sub(r"\s+\d{1,2}$", "", s)
+    s = re.sub(r"[T\s]\d{1,2}:\d{2}(?::\d{2})?.*$", "", s)
     s = s.strip().rstrip(",")
-    s_clean = _heal_ocr_date(s)
 
     def make_date(y, m, d):
         if y < 70:
@@ -183,163 +257,30 @@ def parse_date_flexible(val, default_year: int = None) -> date | None:
         except (ValueError, TypeError):
             return None
 
-    if re.fullmatch(r"\d{8}", s_clean):
-        y_cand = int(s_clean[:4])
-        if 1970 <= y_cand <= 2099:
-            d = make_date(y_cand, int(s_clean[4:6]), int(s_clean[6:8]))
-            if d:
-                return d
-        d = make_date(int(s_clean[4:8]), int(s_clean[2:4]), int(s_clean[:2]))
-        if d:
-            return d
-
-    if re.fullmatch(r"\d{6}", s_clean):
-        d = make_date(int(s_clean[4:6]), int(s_clean[2:4]), int(s_clean[:2]))
-        if d:
-            return d
-
-    m_match = re.search(
-        r"\b(\d{1,2})[/\.\- ]([A-Za-z]+)[/\.\- ](\d{2,4})\b", s_clean
-    )
+    m_match = re.search(r"\b(\d{1,2})[/\.\- ]([A-Za-z]+)[/\.\- ](\d{2,4})\b", s)
     if m_match:
-        d_val = int(m_match.group(1))
-        m_name = m_match.group(2).lower()
-        y_val = int(m_match.group(3))
+        d_val, m_name, y_val = int(m_match.group(1)), m_match.group(2).lower(), int(m_match.group(3))
         if m_name in MONTH_NAME_TO_NUM:
             res = make_date(y_val, MONTH_NAME_TO_NUM[m_name], d_val)
             if res:
                 return res
 
-    m_first = re.search(
-        r"\b([A-Za-z]+)[/\.\- ](\d{1,2})(?:,[ ]*|[/\.\- ])(\d{2,4})\b",
-        s_clean,
-    )
-    if m_first:
-        m_name = m_first.group(1).lower()
-        d_val = int(m_first.group(2))
-        y_val = int(m_first.group(3))
-        if m_name in MONTH_NAME_TO_NUM:
-            res = make_date(y_val, MONTH_NAME_TO_NUM[m_name], d_val)
-            if res:
-                return res
+    d_dash = re.search(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b", s)
+    if d_dash:
+        p1, p2, p3 = int(d_dash.group(1)), int(d_dash.group(2)), int(d_dash.group(3))
+        res = make_date(p3, p2, p1)
+        if res:
+            return res
 
-    y_m_first = re.search(
-        r"\b(\d{4})[/\.\- ]([A-Za-z]+)[/\.\- ](\d{1,2})\b", s_clean
-    )
-    if y_m_first:
-        y_val = int(y_m_first.group(1))
-        m_name = y_m_first.group(2).lower()
-        d_val = int(y_m_first.group(3))
-        if m_name in MONTH_NAME_TO_NUM:
-            res = make_date(y_val, MONTH_NAME_TO_NUM[m_name], d_val)
-            if res:
-                return res
-
-    y_dash = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", s_clean)
+    y_dash = re.search(r"\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b", s)
     if y_dash:
         res = make_date(int(y_dash.group(1)), int(y_dash.group(2)), int(y_dash.group(3)))
         if res:
             return res
 
-    y_slash = re.search(r"\b(\d{4})/(\d{1,2})/(\d{1,2})\b", s_clean)
-    if y_slash:
-        res = make_date(int(y_slash.group(1)), int(y_slash.group(2)), int(y_slash.group(3)))
-        if res:
-            return res
-
-    d_dash = re.search(r"\b(\d{1,2})-(\d{1,2})-(\d{2,4})\b", s_clean)
-    if d_dash:
-        res = make_date(int(d_dash.group(3)), int(d_dash.group(2)), int(d_dash.group(1)))
-        if res:
-            return res
-
-    d_slash = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b", s_clean)
-    if d_slash:
-        res = make_date(int(d_slash.group(3)), int(d_slash.group(2)), int(d_slash.group(1)))
-        if res:
-            return res
-
-    d_dot = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b", s_clean)
-    if d_dot:
-        res = make_date(int(d_dot.group(3)), int(d_dot.group(2)), int(d_dot.group(1)))
-        if res:
-            return res
-
-    d_space = re.search(r"\b([0-3]?\d) ([0-1]?\d) (\d{4})\b", s_clean)
-    if d_space:
-        res = make_date(int(d_space.group(3)), int(d_space.group(2)), int(d_space.group(1)))
-        if res:
-            return res
-
-    if default_year is not None:
-        no_y_text = re.search(r"\b(\d{1,2})[/\.\- ]([A-Za-z]+)\b", s_clean)
-        if no_y_text and no_y_text.group(2).lower() in MONTH_NAME_TO_NUM:
-            return make_date(
-                default_year,
-                MONTH_NAME_TO_NUM[no_y_text.group(2).lower()],
-                int(no_y_text.group(1)),
-            )
-
-        no_y_dash = re.search(r"\b(\d{1,2})-(\d{1,2})\b", s_clean)
-        if no_y_dash:
-            return make_date(default_year, int(no_y_dash.group(2)), int(no_y_dash.group(1)))
-
-        no_y_slash = re.search(r"\b(\d{1,2})/(\d{1,2})\b", s_clean)
-        if no_y_slash:
-            return make_date(default_year, int(no_y_slash.group(2)), int(no_y_slash.group(1)))
-
     return None
 
 
-def clean_float(val) -> float:
-    if val is None:
-        return 0.0
-    s = str(val).strip()
-    if not s or s == "-":
-        return 0.0
-
-    match = re.search(r"[-+]?[\d,]+\.\d{2,3}(?:\s*(?:CR|DR))?", s, re.IGNORECASE)
-    if not match:
-        return 0.0
-
-    target = match.group(0).replace(",", "").strip()
-    is_negative = target.startswith("-") or "(DR)" in target.upper() or "OD" in target.upper()
-    s_clean = re.sub(r"[^\d\.]", "", target)
-    try:
-        f = float(s_clean)
-        return -f if is_negative else f
-    except ValueError:
-        return 0.0
-
-
-def extract_strict_decimal(tokens: list[str]) -> float:
-    for t in tokens:
-        c = (
-            t.replace(",", "")
-            .replace("+", "")
-            .replace("₹", "")
-            .replace("Rs.", "")
-            .strip()
-        )
-        c = re.sub(r"(?:CR|DR)$", "", c, flags=re.IGNORECASE).strip()
-        if re.match(r"^[-+]?\d+\.\d{2,3}$", c):
-            try:
-                return abs(round(float(c), 2))
-            except ValueError:
-                continue
-    return 0.0
-
-
-def _is_footer_or_total_text(text: str) -> bool:
-    if not text:
-        return False
-    t_clean = text.strip()
-    return any(
-        re.search(pat, t_clean, re.IGNORECASE) for pat in FOOTER_AND_TOTAL_PATTERNS
-    )
-
-
-# ----------------- PARSING ENGINE -----------------
 class AnchorStatementParser:
 
     def __init__(self, log_fn=None):
@@ -352,243 +293,95 @@ class AnchorStatementParser:
         first_tx_date_str: str = "",
         opening_bal: float = None,
         expected_closing_bal: float = None,
-    ) -> tuple[pd.DataFrame, dict]:
+    ):
+        import pandas as pd
+        import pdfplumber
+
         target_date = parse_date_flexible(first_tx_date_str)
         if not target_date:
-            raise ValueError(
-                f"Could not parse First Transaction Date: '{first_tx_date_str}'."
-            )
+            raise ValueError(f"Could not parse First Transaction Date: '{first_tx_date_str}'")
 
         with pdfplumber.open(pdf_path, password=password if password else None) as pdf:
-            self.log(
-                f"Opened PDF: {len(pdf.pages)} pages. Locating anchor date: {target_date.strftime('%d-%m-%Y')}..."
+            self.log(f"Opened PDF: {len(pdf.pages)} pages. Locating anchor: {target_date.strftime('%d-%m-%Y')}...")
+
+            anchor_found, anchor_page_idx, header_cols, anchor_y = self._locate_anchor_and_headers(pdf, target_date)
+            if not anchor_found:
+                raise ValueError(f"Could not locate transaction for date '{first_tx_date_str}'. Verify statement input.")
+
+            self.log(f"Identified column boundaries on Page {anchor_page_idx}: {list(header_cols.keys())}")
+            raw_txs, in_table_op_bal, in_table_cl_bal = self._extract_all_transactions_borderless(
+                pdf, anchor_page_idx, anchor_y, header_cols, target_date.year
             )
 
-            grid_detected, grid_col_map, anchor_page_idx = self._detect_grid_structure(
-                pdf, target_date
-            )
-
-            raw_txs = []
-            in_table_op_bal = None
-
-            if grid_detected:
-                self.log(
-                    f"Locked {len(grid_col_map)} table columns from Page {anchor_page_idx}. Extracting rows using verified column mappings..."
-                )
-                raw_txs, in_table_op_bal = self._extract_all_grid_pages(
-                    pdf, anchor_page_idx, grid_col_map, target_date
-                )
-            else:
-                self.log("Document is borderless. Using horizontal coordinate engine...")
-                anchor_found, anchor_page_idx, header_cols, anchor_y = (
-                    self._locate_anchor_and_headers(pdf, target_date)
-                )
-                if not anchor_found:
-                    raise ValueError(
-                        f"Could not find transaction on '{first_tx_date_str}' containing amounts. "
-                        "Verify the exact first transaction date in your PDF."
-                    )
-                raw_txs, in_table_op_bal = self._extract_all_transactions_borderless(
-                    pdf, anchor_page_idx, anchor_y, header_cols, target_date.year
-                )
-
-        self.log(f"Extracted {len(raw_txs)} transaction rows.")
+        self.log(f"Extracted {len(raw_txs)} legitimate transactions.")
 
         effective_op_bal = opening_bal
         if effective_op_bal is None and in_table_op_bal is not None:
             effective_op_bal = in_table_op_bal
             self.log(f"Adopted in-table Opening Balance: ₹{effective_op_bal:,.2f}")
 
-        # Check for reverse chronological order (newest to oldest) and normalize
+        # Reverse chronological sequence handling
         parsed_dates = [tx["date_obj"] for tx in raw_txs if tx.get("date_obj")]
         if len(parsed_dates) >= 2:
-            descending_count = sum(
-                1 for i in range(len(parsed_dates) - 1) if parsed_dates[i] > parsed_dates[i + 1]
-            )
-            ascending_count = sum(
-                1 for i in range(len(parsed_dates) - 1) if parsed_dates[i] < parsed_dates[i + 1]
-            )
-            if descending_count > ascending_count:
-                self.log(
-                    "Detected reverse chronological order (newest to oldest). "
-                    "Normalizing into chronological sequence for ledger reconciliation..."
-                )
+            desc_count = sum(1 for i in range(len(parsed_dates) - 1) if parsed_dates[i] > parsed_dates[i + 1])
+            asc_count = sum(1 for i in range(len(parsed_dates) - 1) if parsed_dates[i] < parsed_dates[i + 1])
+            if desc_count > asc_count:
+                self.log("Detected reverse chronology (newest first). Inverting to chronological sequence...")
                 raw_txs.reverse()
 
-        reconciled_rows, calculated_op_bal = self._reconcile(raw_txs, effective_op_bal)
+        # RECONCILE: PDF Bal prevails directly on every row
+        reconciled_rows, calculated_op_bal, running_math_bal = self._reconcile(raw_txs, effective_op_bal)
 
-        final_bal = (
-            reconciled_rows[-1]["Bal"] if reconciled_rows else calculated_op_bal
-        )
+        # -------------------------------------------------------------------------
+        # DEFINITIVE CLOSING BALANCE:
+        # If tool is able to extract PDF Bal, that bal SHALL PREVAIL with NO adjustment.
+        # -------------------------------------------------------------------------
+        last_extracted_pdf_bal = None
+        for tx in reversed(raw_txs):
+            if tx.get("bal") and tx["bal"] != 0.0:
+                last_extracted_pdf_bal = tx["bal"]
+                break
+
+        if in_table_cl_bal is not None and in_table_cl_bal != 0.0:
+            definitive_closing_bal = in_table_cl_bal
+            self.log(f"Definitive Statement Closing Balance (from Bal c/d / Summary): ₹{definitive_closing_bal:,.2f}")
+        elif last_extracted_pdf_bal is not None:
+            definitive_closing_bal = last_extracted_pdf_bal
+            self.log(f"Definitive Statement Closing Balance (from Last Tx PDF Bal): ₹{definitive_closing_bal:,.2f}")
+        else:
+            definitive_closing_bal = reconciled_rows[-1]["Bal"] if reconciled_rows else calculated_op_bal
+
+        final_bal = definitive_closing_bal
+
         total_dr = sum(r["Dr"] for r in reconciled_rows[1:])
         total_cr = sum(r["Cr"] for r in reconciled_rows[1:])
+
+        # Determine verification match against target
+        target_to_compare = expected_closing_bal if expected_closing_bal is not None else definitive_closing_bal
+        diff = round(final_bal - target_to_compare, 2)
+        closing_matches = abs(diff) <= 0.05
+
+        math_diff = round(running_math_bal - final_bal, 2)
+        math_reconciled = abs(math_diff) <= 0.05
+
+        if not math_reconciled:
+            self.log(f"Note: Theoretical math variance of ₹{math_diff:,.2f} detected against PDF balance, but PDF Bal prevails unconditionally.")
 
         verification_info = {
             "opening_bal": calculated_op_bal,
             "final_bal": final_bal,
+            "running_math_bal": running_math_bal,
             "total_dr": total_dr,
             "total_cr": total_cr,
-            "tx_count": len(reconciled_rows) - 1,
-            "expected_closing_bal": expected_closing_bal,
-            "closing_matches": True,
-            "diff": 0.0,
+            "tx_count": max(0, len(reconciled_rows) - 1),
+            "expected_closing_bal": target_to_compare,
+            "closing_matches": closing_matches,
+            "math_reconciled": math_reconciled,
+            "diff": diff,
+            "math_diff": math_diff,
         }
 
-        if expected_closing_bal is not None:
-            diff = round(final_bal - expected_closing_bal, 2)
-            verification_info["diff"] = diff
-            verification_info["closing_matches"] = abs(diff) <= 0.05
-
         return pd.DataFrame(reconciled_rows), verification_info
-
-    def _detect_grid_structure(self, pdf, target_date):
-        for page_idx, page in enumerate(pdf.pages, start=1):
-            tables = page.extract_tables()
-            if not tables:
-                continue
-
-            for table in tables:
-                if len(table) < 2 or len(table[0]) < 4:
-                    continue
-
-                header_row = [str(c).lower().replace("\n", " ").strip() for c in table[0]]
-                col_indices = {}
-                assigned = set()
-
-                for col_name in [
-                    "serial_no",
-                    "val_date",
-                    "chq_ref",
-                    "particulars",
-                    "dr",
-                    "cr",
-                    "bal",
-                    "date",
-                ]:
-                    keywords = HEADER_KEYWORDS[col_name]
-                    for idx, cell_text in enumerate(header_row):
-                        if idx in assigned:
-                            continue
-                        if _match_keyword(cell_text, keywords):
-                            col_indices[col_name] = idx
-                            assigned.add(idx)
-                            break
-
-                if (
-                    "date" in col_indices
-                    and "particulars" in col_indices
-                    and ("dr" in col_indices or "cr" in col_indices or "bal" in col_indices)
-                ):
-                    return True, col_indices, page_idx
-
-        return False, {}, 0
-
-    def _extract_all_grid_pages(
-        self, pdf, start_page, col_map, target_date
-    ):
-        raw_txs = []
-        started = False
-        in_table_op_bal = None
-
-        for page_idx in range(start_page - 1, len(pdf.pages)):
-            page = pdf.pages[page_idx]
-            tables = page.extract_tables()
-            if not tables:
-                continue
-
-            for table in tables:
-                if len(table) < 1 or len(table[0]) < 4:
-                    continue
-
-                for row in table:
-                    if not row or not any(row):
-                        continue
-
-                    row_str = " ".join([str(c) for c in row if c]).lower()
-                    if "transaction details" in row_str or "particulars" in row_str or "credited amount" in row_str:
-                        continue
-                    if _is_footer_or_total_text(row_str):
-                        continue
-
-                    def get_cell(key):
-                        idx = col_map.get(key)
-                        if idx is not None and idx < len(row) and row[idx] is not None:
-                            return str(row[idx]).strip()
-                        return ""
-
-                    raw_date = get_cell("date")
-                    date_obj = parse_date_flexible(
-                        raw_date, default_year=target_date.year
-                    )
-                    desc = get_cell("particulars").replace("\n", " ")
-                    ref = get_cell("chq_ref").replace("\n", "")
-                    dr_val = clean_float(get_cell("dr"))
-                    cr_val = clean_float(get_cell("cr"))
-                    bal_val = clean_float(get_cell("bal"))
-
-                    if "bal" in col_map and col_map["bal"] >= len(row):
-                        bal_val = clean_float(row[-1])
-                    if "particulars" in col_map and col_map["particulars"] >= len(row):
-                        desc = str(row[1]).replace("\n", " ") if len(row) > 1 else ""
-
-                    is_op = (
-                        "opening balance" in desc.lower()
-                        or "brought forward" in desc.lower()
-                        or "balance forward" in desc.lower()
-                    )
-                    if is_op:
-                        op_cand = (
-                            abs(bal_val)
-                            if abs(bal_val) > 0.0
-                            else (abs(cr_val) if abs(cr_val) > 0.0 else abs(dr_val))
-                        )
-                        if op_cand > 0.0 and in_table_op_bal is None:
-                            in_table_op_bal = op_cand
-                        if date_obj and date_obj == target_date:
-                            started = True
-                        continue
-
-                    has_movement = (
-                        abs(dr_val) > 0.0 or abs(cr_val) > 0.0 or abs(bal_val) > 0.0
-                    )
-
-                    if not started:
-                        if date_obj and date_obj == target_date and has_movement:
-                            started = True
-                        else:
-                            continue
-
-                    if not date_obj and not has_movement:
-                        continue
-
-                    cheque_val = ""
-                    ref_final = ref
-                    if ref in ("000000", "0", "-", ""):
-                        upi_m = re.search(r"UPI/(?:DR|CR)/(\d{12})", desc)
-                        neft_m = re.search(r"(?:CMS|NEFT)[A-Za-z0-9]+", desc)
-                        if upi_m:
-                            ref_final = upi_m.group(1)
-                        elif neft_m:
-                            ref_final = neft_m.group(0)
-                        else:
-                            ref_final = ""
-                    elif CHEQUE_6DIGIT_REGEX.match(ref):
-                        cheque_val = ref
-
-                    raw_txs.append(
-                        {
-                            "date_obj": date_obj,
-                            "raw_date": raw_date,
-                            "ref_no": ref_final,
-                            "cheque_no": cheque_val,
-                            "particulars_parts": [desc],
-                            "dr": abs(dr_val),
-                            "cr": abs(cr_val),
-                            "bal": bal_val if bal_val != 0.0 else 0.0,
-                        }
-                    )
-
-        return raw_txs, in_table_op_bal
 
     def _locate_anchor_and_headers(self, pdf, target_date):
         for page_idx, page in enumerate(pdf.pages, start=1):
@@ -602,114 +395,60 @@ class AnchorStatementParser:
                 detected_date = None
                 for i in range(min(5, len(line))):
                     w_text = line[i]["text"].strip()
-                    if w_text.isdigit() and len(w_text) <= 4:
-                        continue
-
                     d = parse_date_flexible(w_text)
                     if d:
                         detected_date = d
                         break
 
-                    if i + 1 < len(line):
-                        d2 = parse_date_flexible(w_text + " " + line[i + 1]["text"])
-                        if d2:
-                            detected_date = d2
-                            break
+                has_decimals = any(extract_strict_decimal(w["text"]) > 0 for w in line[1:])
 
-                    if i + 2 < len(line):
-                        d3 = parse_date_flexible(
-                            w_text + " " + line[i + 1]["text"] + " " + line[i + 2]["text"]
-                        )
-                        if d3:
-                            detected_date = d3
-                            break
-
-                has_amounts = any(
-                    re.search(r"\d+\.\d{2}", w["text"]) for w in line[1:]
-                )
-
-                if detected_date and detected_date == target_date and has_amounts:
+                if detected_date and detected_date == target_date and has_decimals:
                     anchor_y = line[0]["top"]
 
-                    header_line = None
-                    for prev_idx in range(line_idx - 1, max(-1, line_idx - 8), -1):
-                        prev_str = " ".join([w["text"].lower() for w in lines[prev_idx]])
-                        if "date" in prev_str and any(
-                            _match_keyword(prev_str, HEADER_KEYWORDS[k])
-                            for k in ["particulars", "chq_ref", "cr", "dr", "serial_no"]
-                        ):
-                            header_line = lines[prev_idx]
-                            break
+                    header_words = []
+                    for prev_idx in range(line_idx - 1, max(-1, line_idx - 15), -1):
+                        prev_line = lines[prev_idx]
+                        prev_str = " ".join([w["text"].lower() for w in prev_line])
+                        if any(_match_keyword(prev_str, HEADER_KEYWORDS[k]) for k in ["dr", "cr", "bal", "particulars"]):
+                            header_words.extend(prev_line)
 
-                    header_cols = self._build_header_intervals(
-                        header_line, page.width
-                    )
+                    header_cols = self._build_header_intervals(header_words, page.width)
                     return True, page_idx, header_cols, anchor_y
 
         return False, 0, {}, 0.0
 
-    def _build_header_intervals(self, header_line, page_width):
-        if not header_line:
-            return {
-                "serial_no": (0, 45),
-                "date": (45, 110),
-                "val_date": (110, 175),
-                "particulars": (175, 380),
-                "chq_ref": (380, 430),
-                "dr": (430, 495),
-                "cr": (495, 555),
-                "bal": (555, page_width),
-            }
-
+    def _build_header_intervals(self, header_words, page_width):
         col_positions = {}
-        used_words = set()
-
-        for key in [
-            "serial_no",
-            "val_date",
-            "chq_ref",
-            "particulars",
-            "dr",
-            "cr",
-            "bal",
-            "date",
-        ]:
-            for w in header_line:
-                if id(w) in used_words:
-                    continue
+        for key in ["date", "particulars", "chq_ref", "dr", "cr", "bal"]:
+            best_match = None
+            for w in header_words:
                 if _match_keyword(w["text"], HEADER_KEYWORDS[key]):
-                    col_positions[key] = w
-                    used_words.add(id(w))
+                    best_match = w
                     break
+            if best_match:
+                col_positions[key] = (best_match["x0"] + best_match["x1"]) / 2
 
-        sorted_cols = sorted(col_positions.items(), key=lambda item: item[1]["x0"])
+        if "bal" not in col_positions:
+            col_positions["bal"] = page_width * 0.88
+        if "cr" not in col_positions:
+            col_positions["cr"] = col_positions["bal"] - (page_width * 0.12)
+        if "dr" not in col_positions:
+            col_positions["dr"] = col_positions["cr"] - (page_width * 0.12)
+        if "particulars" not in col_positions:
+            col_positions["particulars"] = col_positions["dr"] - (page_width * 0.25)
+        if "date" not in col_positions:
+            col_positions["date"] = page_width * 0.06
+
+        sorted_cols = sorted(col_positions.items(), key=lambda item: item[1])
         intervals = {}
         for i in range(len(sorted_cols)):
             col_name = sorted_cols[i][0]
-            curr_w = sorted_cols[i][1]
-            x_left = 0 if i == 0 else (sorted_cols[i - 1][1]["x1"] + curr_w["x0"]) / 2
-            x_right = (
-                page_width
-                if i == len(sorted_cols) - 1
-                else (curr_w["x1"] + sorted_cols[i + 1][1]["x0"]) / 2
-            )
-            intervals[col_name] = (x_left, x_right)
-
-        for req in ["date", "particulars"]:
-            if req not in intervals:
-                intervals[req] = (0, page_width)
+            curr_center = sorted_cols[i][1]
+            left_bound = 0 if i == 0 else (sorted_cols[i - 1][1] + curr_center) / 2
+            right_bound = page_width if i == len(sorted_cols) - 1 else (curr_center + sorted_cols[i + 1][1]) / 2
+            intervals[col_name] = (left_bound, right_bound)
 
         return intervals
-
-    def _bin_words(self, line, intervals):
-        data = {k: [] for k in intervals}
-        for w in line:
-            mid = (w["x0"] + w["x1"]) / 2
-            for col_name, (x_left, x_right) in intervals.items():
-                if x_left <= mid < x_right:
-                    data[col_name].append(w["text"])
-                    break
-        return data
 
     def _group_words_by_line(self, words):
         words_sorted = sorted(words, key=lambda w: (round(w["top"], 1), w["x0"]))
@@ -718,7 +457,7 @@ class AnchorStatementParser:
         last_top = None
 
         for w in words_sorted:
-            if last_top is None or abs(w["top"] - last_top) <= 3.2:
+            if last_top is None or abs(w["top"] - last_top) <= 3.5:
                 curr.append(w)
                 last_top = w["top"]
             else:
@@ -729,16 +468,23 @@ class AnchorStatementParser:
             lines.append(sorted(curr, key=lambda item: item["x0"]))
         return lines
 
-    def _extract_all_transactions_borderless(
-        self, pdf, start_page_idx, start_y, header_cols, default_year
-    ):
+    def _extract_all_transactions_borderless(self, pdf, start_page_idx, start_y, header_cols, default_year):
         raw_txs = []
         current_tx = None
         last_seen_date = None
         last_seen_raw_date = ""
         in_table_op_bal = None
+        in_table_cl_bal = None
+        statement_ended = False
+
+        dr_left, dr_right = header_cols.get("dr", (0, 0))
+        cr_left, cr_right = header_cols.get("cr", (0, 0))
+        bal_left, bal_right = header_cols.get("bal", (0, 0))
 
         for page_idx in range(start_page_idx - 1, len(pdf.pages)):
+            if statement_ended:
+                break
+
             page = pdf.pages[page_idx]
             words = page.extract_words(x_tolerance=2, y_tolerance=2)
             if not words:
@@ -747,77 +493,119 @@ class AnchorStatementParser:
             lines = self._group_words_by_line(words)
 
             for line in lines:
-                if page_idx == start_page_idx - 1 and line[0]["top"] < start_y - 2:
+                if page_idx == start_page_idx - 1 and line[0]["top"] < start_y - 3:
                     continue
 
                 line_full_text = " ".join([w["text"] for w in line]).strip()
-                if _is_footer_or_total_text(line_full_text):
+                if not line_full_text:
                     continue
 
-                binned = self._bin_words(line, header_cols)
-
-                date_tokens = binned.get("date", [])
-                line_date = parse_date_flexible(
-                    " ".join(date_tokens), default_year=default_year
-                )
-                if not line_date:
-                    for t in line[:4]:
-                        if not (t["text"].isdigit() and len(t["text"]) <= 4):
-                            cand = parse_date_flexible(t["text"], default_year=default_year)
-                            if cand:
-                                line_date = cand
-                                break
-
-                dr_val = extract_strict_decimal(binned.get("dr", []))
-                cr_val = extract_strict_decimal(binned.get("cr", []))
-                bal_val = extract_strict_decimal(binned.get("bal", []))
-
-                if bal_val == 0.0 and len(line) >= 2:
-                    decimals_on_line = [
-                        extract_strict_decimal([w["text"]])
-                        for w in line
-                        if extract_strict_decimal([w["text"]]) > 0.0
-                    ]
-                    if len(decimals_on_line) >= 2:
-                        bal_val = decimals_on_line[-1]
-                        if dr_val == 0.0 and cr_val == 0.0:
-                            dr_val = decimals_on_line[-2]
-
-                chq_ref_str = " ".join(binned.get("chq_ref", [])).strip()
-                particulars_str = " ".join(binned.get("particulars", [])).strip()
-
-                if _is_footer_or_total_text(particulars_str):
+                # 1. Annexure / Statutory disclosure cutoff
+                if is_annexure_or_legend_line(line_full_text):
+                    if len(raw_txs) > 0 or current_tx is not None:
+                        statement_ended = True
+                        break
                     continue
 
-                if (
-                    "balance forward" in particulars_str.lower()
-                    or "brought forward" in particulars_str.lower()
-                    or "opening balance" in particulars_str.lower()
-                ):
-                    op_amt = (
-                        bal_val if bal_val > 0.0 else (cr_val if cr_val > 0.0 else dr_val)
-                    )
-                    if op_amt > 0.0 and in_table_op_bal is None:
-                        in_table_op_bal = op_amt
-                    if line_date:
-                        last_seen_date = line_date
-                        last_seen_raw_date = " ".join(date_tokens)
+                # 2. Extract decimal numbers and coordinates
+                decimal_items = []
+                particulars_tokens = []
+
+                for w in line:
+                    val = extract_strict_decimal(w["text"])
+                    mid_x = (w["x0"] + w["x1"]) / 2
+                    if val > 0:
+                        decimal_items.append((val, mid_x))
+                    else:
+                        if mid_x < dr_left and not parse_date_flexible(w["text"], default_year=default_year):
+                            particulars_tokens.append(w["text"])
+
+                # 3. Statement Summary / Grand Total rows
+                if is_total_summary_line(line_full_text, line, decimal_items):
+                    if len(decimal_items) >= 1:
+                        cl_cand = decimal_items[-1][0]
+                        if cl_cand > 0 and in_table_cl_bal is None:
+                            in_table_cl_bal = cl_cand
+                            self.log(f"Captured Closing Balance from Statement TOTAL: ₹{cl_cand:,.2f}")
+                    clean_upper = line_full_text.strip().upper()
+                    if not re.search(r"\b(?:PAGE|SUB)\s*TOTAL\b", clean_upper):
+                        statement_ended = True
+                        break
                     continue
+
+                # 4. Closing Balance balancing entries (e.g., By Balance c/d)
+                if is_closing_balance_line(line_full_text):
+                    if len(decimal_items) > 0:
+                        cl_cand = decimal_items[0][0]
+                        if cl_cand > 0 and in_table_cl_bal is None:
+                            in_table_cl_bal = cl_cand
+                            self.log(f"Captured Closing Balance from Bal c/d: ₹{cl_cand:,.2f}")
+                    continue
+
+                # 5. Opening Balance / Balance b/d
+                if is_opening_balance_line(line_full_text):
+                    if len(decimal_items) > 0:
+                        op_cand = decimal_items[-1][0]
+                        if op_cand > 0 and in_table_op_bal is None:
+                            in_table_op_bal = op_cand
+                            self.log(f"Captured Opening Balance: ₹{op_cand:,.2f}")
+                    continue
+
+                # 6. Filter footer text
+                if any(re.search(pat, line_full_text, re.IGNORECASE) for pat in FOOTER_AND_TOTAL_PATTERNS):
+                    continue
+
+                dr_val = 0.0
+                cr_val = 0.0
+                bal_val = 0.0
+
+                if len(decimal_items) >= 3:
+                    bal_val = decimal_items[-1][0]
+                    cr_val = decimal_items[-2][0]
+                    dr_val = decimal_items[-3][0]
+                elif len(decimal_items) == 2:
+                    bal_val = decimal_items[-1][0]
+                    tx_amt, tx_x = decimal_items[-2]
+                    if abs(tx_x - ((dr_left + dr_right) / 2)) <= abs(tx_x - ((cr_left + cr_right) / 2)):
+                        dr_val = tx_amt
+                    else:
+                        cr_val = tx_amt
+                elif len(decimal_items) == 1:
+                    amt, x_pos = decimal_items[0]
+                    if x_pos >= bal_left:
+                        bal_val = amt
+                    elif cr_left <= x_pos < cr_right:
+                        cr_val = amt
+                    elif dr_left <= x_pos < dr_right:
+                        dr_val = amt
+                    else:
+                        bal_val = amt
+
+                particulars_str = " ".join(particulars_tokens).strip()
+
+                line_date = None
+                date_str = ""
+                for w in line[:4]:
+                    d = parse_date_flexible(w["text"], default_year=default_year)
+                    if d:
+                        line_date = d
+                        date_str = w["text"]
+                        break
 
                 if line_date:
                     last_seen_date = line_date
-                    last_seen_raw_date = " ".join(date_tokens)
+                    last_seen_raw_date = date_str
 
-                has_movement = dr_val > 0.0 or cr_val > 0.0 or bal_val > 0.0
+                has_movement = dr_val > 0 or cr_val > 0 or bal_val > 0
 
                 is_new_tx = False
                 tx_date_to_use = None
                 raw_date_to_use = ""
 
-                if line_date and (has_movement or chq_ref_str):
+                if line_date and has_movement:
                     is_new_tx = True
                     tx_date_to_use = line_date
-                    raw_date_to_use = " ".join(date_tokens)
+                    raw_date_to_use = date_str
                 elif (not line_date) and has_movement and (last_seen_date is not None):
                     is_new_tx = True
                     tx_date_to_use = last_seen_date
@@ -827,159 +615,141 @@ class AnchorStatementParser:
                     if current_tx:
                         raw_txs.append(current_tx)
 
-                    cheque_val = (
-                        chq_ref_str if CHEQUE_6DIGIT_REGEX.match(chq_ref_str) else ""
-                    )
-
                     current_tx = {
                         "date_obj": tx_date_to_use,
                         "raw_date": raw_date_to_use,
-                        "ref_no": chq_ref_str,
-                        "cheque_no": cheque_val,
-                        "particulars_parts": (
-                            [particulars_str] if particulars_str else []
-                        ),
+                        "ref_no": "",
+                        "cheque_no": "",
+                        "particulars_parts": [particulars_str] if particulars_str else [],
                         "dr": dr_val,
                         "cr": cr_val,
                         "bal": bal_val,
                     }
                 elif current_tx:
-                    narration_part = particulars_str
-                    if (
-                        not narration_part
-                        and dr_val == 0.0
-                        and cr_val == 0.0
-                        and bal_val == 0.0
-                    ):
-                        narration_part = line_full_text
-
-                    if narration_part and not _is_footer_or_total_text(narration_part):
-                        current_tx["particulars_parts"].append(narration_part)
+                    if particulars_str and len(current_tx["particulars_parts"]) < 6:
+                        is_header_row = any(_match_keyword(particulars_str, HEADER_KEYWORDS[k]) for k in ["dr", "cr", "bal", "date"])
+                        if not is_header_row and not is_annexure_or_legend_line(particulars_str):
+                            current_tx["particulars_parts"].append(particulars_str)
 
         if current_tx:
             raw_txs.append(current_tx)
 
-        return raw_txs, in_table_op_bal
+        return raw_txs, in_table_op_bal, in_table_cl_bal
 
-    def _reconcile(
-        self,
-        raw_txs: list[dict],
-        opening_bal: float | None,
-        tol: float = 0.05,
-    ) -> tuple[list[dict], float]:
+    def _reconcile(self, raw_txs: list[dict], opening_bal: float | None, tol: float = 0.05):
         output = []
-
         if not raw_txs:
             op = float(opening_bal) if opening_bal is not None else 0.0
-            return output, op
+            return output, op, op
+
+        # Determine account type: Standard (Cr adds, Dr subtracts) vs OD/CC (Dr adds, Cr subtracts)
+        is_od_account = False
+        for i in range(len(raw_txs) - 1):
+            b1 = raw_txs[i].get("bal", 0.0)
+            b2 = raw_txs[i + 1].get("bal", 0.0)
+            if b1 != 0.0 and b2 != 0.0:
+                delta = round(b2 - b1, 2)
+                dr2 = raw_txs[i + 1].get("dr", 0.0)
+                cr2 = raw_txs[i + 1].get("cr", 0.0)
+                if dr2 > 0 and abs(delta - dr2) <= tol:
+                    is_od_account = True
+                    break
+                if cr2 > 0 and abs(delta - cr2) <= tol:
+                    is_od_account = False
+                    break
 
         if opening_bal is None:
             first_tx = raw_txs[0]
-            first_bal = first_tx["bal"]
-            first_dr = first_tx["dr"]
-            first_cr = first_tx["cr"]
+            f_bal = first_tx["bal"]
+            f_dr = first_tx["dr"]
+            f_cr = first_tx["cr"]
 
-            if first_bal != 0.0:
-                if first_dr > 0.0:
-                    opening_bal = round(first_bal + first_dr, 2)
-                elif first_cr > 0.0:
-                    opening_bal = round(first_bal - first_cr, 2)
+            if f_bal > 0:
+                if is_od_account:
+                    opening_bal = round(f_bal - f_dr + f_cr, 2)
                 else:
-                    opening_bal = first_bal
+                    opening_bal = round(f_bal + f_dr - f_cr, 2)
             else:
                 opening_bal = 0.0
 
             self.log(f"Auto-calculated Opening Balance from Tx #1: ₹{opening_bal:,.2f}")
 
         prev_bal = float(opening_bal)
-
         first_date = raw_txs[0]["date_obj"] if raw_txs else None
-        output.append(
-            {
-                "Date": first_date,
-                "Ref No": "",
-                "Cheque No": "",
-                "Particulars": "OPENING BALANCE",
-                "Dr": 0.0,
-                "Cr": 0.0,
-                "Bal": prev_bal,
-                "PDF Bal": prev_bal,
-                "Status": "VERIFIED",
-                "Warning": "",
-            }
-        )
+
+        output.append({
+            "Date": first_date,
+            "Ref No": "",
+            "Cheque No": "",
+            "Particulars": "OPENING BALANCE",
+            "Dr": 0.0,
+            "Cr": 0.0,
+            "Bal": prev_bal,
+            "PDF Bal": prev_bal,
+            "Status": "VERIFIED",
+            "Warning": "",
+        })
+
+        running_math_bal = prev_bal
 
         for tx in raw_txs:
             dr = tx["dr"]
             cr = tx["cr"]
             pdf_bal = tx["bal"]
 
-            if pdf_bal != 0.0 and prev_bal != 0.0:
-                delta = round(pdf_bal - prev_bal, 2)
-                if (dr > 0.0 and cr == 0.0) or (cr > 0.0 and dr == 0.0):
-                    amt = max(dr, cr)
-                    if delta < -tol:
-                        dr = amt
-                        cr = 0.0
-                    elif delta > tol:
-                        cr = amt
-                        dr = 0.0
-                elif dr > 0.0 and cr > 0.0:
-                    if delta < 0:
-                        cr = 0.0
-                    elif delta > 0:
-                        dr = 0.0
+            # Compute theoretical running math
+            if is_od_account:
+                running_math_bal = round(running_math_bal + dr - cr, 2)
+            else:
+                running_math_bal = round(running_math_bal - dr + cr, 2)
 
-            computed_bal = round(prev_bal - dr + cr, 2)
-
+            # -------------------------------------------------------------------------
+            # STRICT LOGIC: If tool is able to extract pdf bal, that bal SHALL PREVAIL
+            # in balance and NO adjustment!
+            # -------------------------------------------------------------------------
             if pdf_bal != 0.0:
-                if (
-                    abs(round(prev_bal - cr + dr, 2) - pdf_bal) <= tol
-                    and dr != cr
-                ):
-                    dr, cr = cr, dr
-                    computed_bal = round(prev_bal - dr + cr, 2)
+                row_bal = pdf_bal
+                math_diff = abs(round(running_math_bal - pdf_bal, 2))
+                if math_diff <= tol:
+                    status = "VERIFIED"
+                    warning = ""
+                    running_math_bal = pdf_bal
+                else:
+                    status = "DIFF"
+                    warning = f"Math diff: ₹{round(running_math_bal - pdf_bal, 2):,.2f}"
+            else:
+                row_bal = running_math_bal
+                status = "VERIFIED"
+                warning = ""
 
-            adj_bal = computed_bal
+            output.append({
+                "Date": tx["date_obj"],
+                "Ref No": tx["ref_no"],
+                "Cheque No": tx["cheque_no"],
+                "Particulars": " ".join(tx["particulars_parts"]).strip(),
+                "Dr": dr,
+                "Cr": cr,
+                "Bal": row_bal,
+                "PDF Bal": pdf_bal,
+                "Status": status,
+                "Warning": warning,
+            })
+            prev_bal = row_bal
 
-            output.append(
-                {
-                    "Date": tx["date_obj"],
-                    "Ref No": tx["ref_no"],
-                    "Cheque No": tx["cheque_no"],
-                    "Particulars": " ".join(tx["particulars_parts"]).strip(),
-                    "Dr": dr,
-                    "Cr": cr,
-                    "Bal": adj_bal,
-                    "PDF Bal": pdf_bal,
-                    "Status": "VERIFIED",
-                    "Warning": "",
-                }
-            )
-            prev_bal = adj_bal
-
-        return output, float(opening_bal)
+        return output, float(opening_bal), running_math_bal
 
 
-def export_to_excel_styled(
-    df: pd.DataFrame,
-    out_path: str,
-    account_name: str = "",
-    account_no: str = "",
-):
-    with pd.ExcelWriter(
-        out_path,
-        engine="openpyxl",
-        date_format="DD-MM-YYYY",
-        datetime_format="DD-MM-YYYY",
-    ) as writer:
+def export_to_excel_styled(df, out_path: str, account_name: str = "", account_no: str = ""):
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+    import pandas as pd
+
+    with pd.ExcelWriter(out_path, engine="openpyxl", date_format="DD-MM-YYYY", datetime_format="DD-MM-YYYY") as writer:
         start_row = 1
         if account_name or account_no:
             start_row = 4
 
-        df.to_excel(
-            writer, index=False, sheet_name="Ledger", startrow=start_row - 1
-        )
+        df.to_excel(writer, index=False, sheet_name="Ledger", startrow=start_row - 1)
         ws = writer.sheets["Ledger"]
 
         if account_name or account_no:
@@ -987,7 +757,6 @@ def export_to_excel_styled(
             ws["B1"] = account_name
             ws["A2"] = "Account Number:"
             ws["B2"] = str(account_no)
-
             label_font = Font(name="Segoe UI", size=10, bold=True, color="1F497D")
             val_font = Font(name="Segoe UI", size=10, bold=True)
             ws["A1"].font = label_font
@@ -995,9 +764,7 @@ def export_to_excel_styled(
             ws["B1"].font = val_font
             ws["B2"].font = val_font
 
-        header_fill = PatternFill(
-            start_color="1F497D", end_color="1F497D", fill_type="solid"
-        )
+        header_fill = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
         header_font = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF")
         thin_border = Border(
             left=Side(style="thin", color="D9D9D9"),
@@ -1013,16 +780,10 @@ def export_to_excel_styled(
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        for row in ws.iter_rows(
-            min_row=header_row_idx + 1,
-            max_row=ws.max_row,
-            min_col=1,
-            max_col=ws.max_column,
-        ):
+        for row in ws.iter_rows(min_row=header_row_idx + 1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
             for cell in row:
                 cell.border = thin_border
                 col_name = df.columns[cell.column - 1]
-
                 if col_name == "Date":
                     cell.number_format = "DD-MM-YYYY"
                     cell.alignment = Alignment(horizontal="center", vertical="center")
@@ -1036,19 +797,12 @@ def export_to_excel_styled(
 
         for col_idx, col_name in enumerate(df.columns, 1):
             col_letter = get_column_letter(col_idx)
-
             if col_name == "Particulars":
-                ws.column_dimensions[col_letter].width = 44
+                ws.column_dimensions[col_letter].width = 46
             elif col_name == "Date":
                 ws.column_dimensions[col_letter].width = 14
             elif col_name in ["Dr", "Cr", "Bal", "PDF Bal"]:
                 ws.column_dimensions[col_letter].width = 16
-            elif col_name in ["Ref No", "Cheque No"]:
-                ws.column_dimensions[col_letter].width = 18
-            elif col_name == "Status":
-                ws.column_dimensions[col_letter].width = 13
-            elif col_name == "Warning":
-                ws.column_dimensions[col_letter].width = 20
             else:
                 ws.column_dimensions[col_letter].width = 15
 
@@ -1067,7 +821,7 @@ class StatementConverter:
         first_tx_date: str = "",
         opening_bal: float = None,
         expected_closing_bal: float = None,
-    ) -> tuple[pd.DataFrame, dict]:
+    ):
         parser = AnchorStatementParser(log_fn=self.log)
         return parser.parse(
             pdf_path,
