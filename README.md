@@ -1,121 +1,106 @@
 # Bank Statement to Excel Converter
 
-A Python desktop application that converts bank statement PDFs into clean, organized Excel files.
+A lightweight Windows desktop application that converts bank statement PDFs into structured, standardized Excel workbooks (`.xlsx`) with balance verification and Excel formulas.
 
-I started building this project to make bank statement processing easier, especially when working with statements from different banks. The idea is simple: select a PDF, enter the required details, and get an Excel file with standardized transaction data and balance checks.
+Built with a classic Windows XP Luna-inspired interface (`#ECE9D8`), the application aims to provide fast startup, clear display on high-DPI screens, and accurate balance checks against the original bank statement.
 
-The application is designed with a classic Windows XP-inspired interface.
-
-> **A note about the project:** I built this project by vibecoding with AI assistance. AI helped me write code, fix bugs, and figure out how different parts of the application work.
+> **Development Note:** This application was built through **vibecoding with AI assistance**. AI helped with code generation, parsing logic, debugging, handling different PDF layouts, and designing the desktop interface.
 
 ---
 
 ## Features
 
-- **PDF to Excel:** Converts bank statement PDFs into a structured Excel workbook.
-- **Standardized Format:** Organizes transactions into consistent columns, making statements easier to read and work with.
-- **Balance Verification:** Compares transaction amounts with the balances printed in the original bank statement to help identify discrepancies.
-- **Multiple Statement Formats:** The parser is being developed to handle different bank statement layouts and date formats.
-- **Handles Opening and Closing Balances:** Uses the balances provided by the user and information available in the statement to help check whether the transactions add up correctly.
-- **Cleaner Transaction Descriptions:** Attempts to keep unrelated text, footnotes, and other information at the end of a PDF out of the transaction data.
-- **Excel Formatting:** Exports data into a formatted `.xlsx` file with readable columns and accounting-style number formats.
-- **Windows Desktop App:** Uses Python and Tkinter, with an interface inspired by the classic Windows XP look.
+- **PDF Balance Comparison:** Uses the running balances printed in the bank statement as a reference for checking extracted transactions and identifying discrepancies.
+- **Excel Formulas:** Generates formulas for running balances, verification checks, discrepancy warnings, and debit/credit totals.
+- **Multiple Date Formats:** Attempts to recognize different date formats used in Indian and international bank statements, such as `16 Jun 19`, `16 Jun 2019`, `Jun 16, 2019`, `16/06/2019`, and `2019-06-16`.
+- **Balancing Figure & Noise Detection:** Attempts to identify non-transactional entries such as `By Balance c/d`, `To Balance c/f`, `TOTAL`, and `STATEMENT SUMMARY`, as well as unrelated text appearing after transactions.
+- **Amount Recovery:** Where supported by the extracted data, uses changes between consecutive balances to help identify missing debit or credit amounts.
+- **Conversion History:** Keeps a history of previous conversions, including timestamps, statuses, and transaction counts. Double-clicking a record can open the workbook or its containing folder.
+- **Clear Form:** Resets the form inputs, logs, and status indicators.
+- **Windows Installer:** Supports packaging the application with PyInstaller and Inno Setup for easier installation on Windows.
 
 ---
 
 ## How It Works
 
-The basic workflow is straightforward:
-
-1. Select the bank statement PDF.
-2. Enter the required details, such as the first transaction date and opening balance.
-3. The application reads the PDF and extracts transaction information.
-4. The extracted transactions are organized into a standardized format.
-5. The application checks the balances and highlights discrepancies where its verification logic detects them.
-6. Export the results to Excel for further review.
-
-### Balance Verification
-
-The main idea is to compare the transactions with the balances shown in the original statement.
-
-For example, suppose the opening balance is ₹21,777.94.
-
-| Transaction | Amount | Calculated Balance |
-|---|---:|---:|
-| Opening balance | — | ₹21,777.94 |
-| Debit | ₹100.00 | ₹21,677.94 |
-| Debit | ₹100.00 | ₹21,577.94 |
-
-The application can compare the calculated balance with the balance printed in the PDF. Differences can then be flagged for review.
-
-The aim is to make discrepancies easier to spot, not to replace manual verification or accounting review.
+1. **Select Statement PDF:** Choose the bank statement PDF and enter its password if required.
+2. **Enter First Transaction Date:** Provide the first transaction date, such as `16/06/2019` or `16 Jun 19`, to help the application locate the transaction table.
+3. **Enter Balances (Optional):** Provide the opening balance or expected closing balance if known. The application may also identify balance information from the statement itself.
+4. **Convert and Check:** The application extracts transaction information, checks the balances using its implemented verification logic, and creates the Excel workbook.
+5. **Review the Results:** Check the verification status in the application or open the generated workbook to inspect the extracted data and formulas.
 
 ---
 
-## Excel Output
+## Excel Output & Audit Columns
 
-The exported workbook is designed to contain columns such as:
+The exported workbook is designed to use the following structure:
 
-| Column | Purpose |
-|---|---|
-| `Date` | Transaction date |
-| `Ref No` | Transaction reference number |
-| `Cheque No` | Cheque number, where available |
-| `Particulars` | Transaction description |
-| `Dr` | Debit amount |
-| `Cr` | Credit amount |
-| `Bal` | Running balance used by the application |
-| `PDF Bal` | Balance extracted from the original PDF |
-| `Status` | Verification result |
-| `Warning` | Details of a detected discrepancy |
+| Column | Header | Type | Description |
+|---|---|---|---|
+| A | `Date` | Date (`DD-MM-YYYY`) | Transaction date |
+| B | `Ref No` | Text | Bank transaction reference number |
+| C | `Cheque No` | Text | Cheque number, where available |
+| D | `Particulars` | Text | Transaction description |
+| E | `Dr` | Number (`#,##0.00`) | Withdrawal or debit amount |
+| F | `Cr` | Number (`#,##0.00`) | Deposit or credit amount |
+| G | `Bal` | Formula | Running balance calculated by Excel |
+| H | `PDF Bal` | Number (`#,##0.00`) | Balance extracted from the PDF |
+| I | `Status` | Formula | Verification result, such as `VERIFIED` or `DIFF` |
+| J | `Warning` | Formula | Indicates a detected discrepancy |
 
-The exact data extracted depends on the layout and quality of the source PDF.
+The actual output depends on the data successfully extracted from the source PDF. Always compare the results with the original statement.
 
 ---
 
 ## Built With
 
-- **Python** — Main programming language
-- **Tkinter** — Desktop interface
-- **pdfplumber** — Reading information from PDF files
+- **Python 3.10+** — Main application
+- **Tkinter & ttk** — Desktop interface
+- **pdfplumber** — Extracting text and positional information from PDFs
 - **pandas** — Organizing transaction data
-- **openpyxl** — Creating and formatting Excel files
-- **PyInstaller** — Packaging the application as a Windows executable
-- **Inno Setup** — Creating a Windows installer
+- **openpyxl** — Creating and formatting Excel workbooks
+- **Pillow (PIL)** — Image and icon processing
+- **PyInstaller** — Packaging the application
+- **Inno Setup** — Creating the Windows installer
 
 ---
 
-## Running the Project
+## Installation & Setup
 
-### Requirements
+### Option 1: Windows Installer
 
-- Python installed on your computer
-- The project files
-- The dependencies listed in `requirements.txt`
+If a release is available, download it from the [Releases page](https://github.com/Batatatab/bank-statement-converter/releases).
 
-### Installation
+1. Download `BankStatementConverter_Setup.exe`.
+2. Run the installer.
+3. Choose whether to create a desktop shortcut, if offered.
+4. Launch the application.
 
-Clone the repository:
+*Note: The installer must be published on the Releases page before it can be downloaded this way.*
+
+### Option 2: Run from Source
+
+**1. Clone the repository**
 
 ```bash
 git clone https://github.com/Batatatab/bank-statement-converter.git
 cd bank-statement-converter
 ```
 
-Create a virtual environment (optional but recommended):
+**2. Create and activate a virtual environment**
 
 ```powershell
 python -m venv venv
 .\venv\Scripts\activate
 ```
 
-Install the required packages:
+**3. Install dependencies**
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Run the application:
+**4. Run the application**
 
 ```bash
 python app_gui.py
@@ -123,35 +108,68 @@ python app_gui.py
 
 ---
 
-## Current Status
+## Building the Installer from Source
 
-This project is a work in progress. Bank statements can differ significantly in their layout, and extracting every transaction correctly is one of the biggest challenges.
+These steps assume that the required files and tools are present in the repository.
 
-The application needs to be tested against different banks and statement formats. Extracted amounts, dates, and balances should always be checked against the original PDF, especially before using the output for accounting or reconciliation work.
+**1. Build the application with PyInstaller**
 
-Bug reports, suggestions, and contributions are welcome.
+```powershell
+pyinstaller --noconsole --onedir --clean --icon=app_icon.ico --add-data "app_icon.ico;." --name "BankStatementConverter" app_gui.py
+```
+
+**2. Compile the installer with Inno Setup**
+
+```powershell
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer.iss"
+```
+
+The installer output location depends on the configuration in `installer.iss`. For example, it may be generated at:
+
+```text
+dist_installer/BankStatementConverter_Setup.exe
+```
 
 ---
 
-## AI-Assisted Development
-
-This is a **vibecoded project**. I used AI tools extensively to help build the application, understand the code, troubleshoot errors, and improve the overall design.
-
-I don't want to present it as perfect or claim that every feature works with every bank statement. There's still plenty to improve.
-
----
 ## Screenshots
 
 ### Main Application
 
 ![Main Application](main-window.png)
+<!-- Example: ![Main Application](screenshots/main-window.png) -->
 
 ### Conversion Process
 
 ![Main Application](conversion-process.png)
+<!-- Example: ![Conversion Process](screenshots/conversion-process.png) -->
 
-### Excel Output
+### Standardized Excel Output
 
-![Main Application](excel-output.png)
+<!-- Add your Excel screenshot here -->
+<!-- Example: ![Excel Output](screenshots/excel-output.png) -->
 
+---
 
+## AI-Assisted Development
+
+This is an open-source, **vibecoded project**. AI tools were used extensively to help build the application, write and understand code, troubleshoot errors, and improve the interface.
+
+I'm learning programming while working on this project. The tool is still evolving, and there is more work to do, particularly in handling different bank statement layouts and improving extraction accuracy.
+
+Suggestions, bug reports, and contributions are welcome.
+
+---
+
+## Disclaimer
+
+1. **Not Professional Advice:** This application is an independent utility intended to assist with document processing. It does not provide financial, accounting, legal, tax, or statutory audit advice.
+2. **Verify the Results:** PDF extraction can be affected by document quality, scanned pages, font encoding, and changes in layout. Always cross-check extracted dates, amounts, and balances against the original bank statement before using the results for bookkeeping, tax filings, GST returns, or audits.
+3. **No Bank Affiliation:** This project is not endorsed by, affiliated with, or sponsored by any bank or financial institution. All referenced trademarks belong to their respective owners.
+4. **Software Provided As-Is:** This software is distributed under the MIT License, without warranties or guarantees. The authors and contributors are not responsible for losses or inaccuracies arising from its use.
+
+---
+
+## License
+
+Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
