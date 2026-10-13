@@ -244,8 +244,7 @@ def parse_date_flexible(val, default_year: int = None) -> date | None:
     s = str(val).strip()
     if not s:
         return None
-    s = re.sub(r"[T\s]\d{1,2}:\d{2}(?::\d{2})?.*$", "", s)
-    s = s.strip().rstrip(",")
+    s = re.sub(r"[T\s]\d{1,2}:\d{2}(?::\d{2})?.*$", "", s).strip().rstrip(",")
 
     def make_date(y, m, d):
         if y < 70:
@@ -257,26 +256,73 @@ def parse_date_flexible(val, default_year: int = None) -> date | None:
         except (ValueError, TypeError):
             return None
 
-    m_match = re.search(r"\b(\d{1,2})[/\.\- ]([A-Za-z]+)[/\.\- ](\d{2,4})\b", s)
-    if m_match:
-        d_val, m_name, y_val = int(m_match.group(1)), m_match.group(2).lower(), int(m_match.group(3))
-        if m_name in MONTH_NAME_TO_NUM:
-            res = make_date(y_val, MONTH_NAME_TO_NUM[m_name], d_val)
+    # 1. Day Mon Year: 16 Jun 19, 16 Jun 2019, 16-Jun-19, 16/Jun/2019, 16.Jun.2019
+    m1 = re.search(r"\b(\d{1,2})[/\.\- ]([A-Za-z]+)[/\.\- ](\d{2,4})\b", s)
+    if m1:
+        d_v = int(m1.group(1))
+        m_v = m1.group(2).lower()
+        y_v = int(m1.group(3))
+        if m_v in MONTH_NAME_TO_NUM:
+            res = make_date(y_v, MONTH_NAME_TO_NUM[m_v], d_v)
             if res:
                 return res
 
-    d_dash = re.search(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b", s)
-    if d_dash:
-        p1, p2, p3 = int(d_dash.group(1)), int(d_dash.group(2)), int(d_dash.group(3))
+    # 2. Mon Day Year: Jun 16, 2019, June 16 19, Jun-16-2019
+    m2 = re.search(r"\b([A-Za-z]+)[/\.\- ](\d{1,2})(?:st|nd|rd|th)?,?[/\.\- ](\d{2,4})\b", s)
+    if m2:
+        m_v = m2.group(1).lower()
+        d_v = int(m2.group(2))
+        y_v = int(m2.group(3))
+        if m_v in MONTH_NAME_TO_NUM:
+            res = make_date(y_v, MONTH_NAME_TO_NUM[m_v], d_v)
+            if res:
+                return res
+
+    # 3. Year-Month-Day: 2019-06-16, 2019/06/16
+    m3 = re.search(r"\b(\d{4})[/\.\-](\d{1,2})[/\.\-](\d{1,2})\b", s)
+    if m3:
+        res = make_date(int(m3.group(1)), int(m3.group(2)), int(m3.group(3)))
+        if res:
+            return res
+
+    # 4. Day-Month-Year numeric: 16/06/2019, 16-06-19, 16.06.2019
+    m4 = re.search(r"\b(\d{1,2})[/\.\-](\d{1,2})[/\.\-](\d{2,4})\b", s)
+    if m4:
+        p1, p2, p3 = int(m4.group(1)), int(m4.group(2)), int(m4.group(3))
         res = make_date(p3, p2, p1)
         if res:
             return res
 
-    y_dash = re.search(r"\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b", s)
-    if y_dash:
-        res = make_date(int(y_dash.group(1)), int(y_dash.group(2)), int(y_dash.group(3)))
-        if res:
-            return res
+    # 5. Day Month Year space-separated numeric: 16 06 2019, 16 06 19
+    m5 = re.search(r"\b(\d{1,2})\s+(\d{1,2})\s+(\d{2,4})\b", s)
+    if m5:
+        p1, p2, p3 = int(m5.group(1)), int(m5.group(2)), int(m5.group(3))
+        if 1 <= p2 <= 12 and 1 <= p1 <= 31:
+            res = make_date(p3, p2, p1)
+            if res:
+                return res
+
+    # 6. Dates without year (with default_year provided)
+    if default_year:
+        m6 = re.search(r"\b(\d{1,2})[/\.\- ]([A-Za-z]+)\b", s)
+        if m6 and m6.group(2).lower() in MONTH_NAME_TO_NUM:
+            res = make_date(default_year, MONTH_NAME_TO_NUM[m6.group(2).lower()], int(m6.group(1)))
+            if res:
+                return res
+
+        m7 = re.search(r"\b([A-Za-z]+)[/\.\- ](\d{1,2})\b", s)
+        if m7 and m7.group(1).lower() in MONTH_NAME_TO_NUM:
+            res = make_date(default_year, MONTH_NAME_TO_NUM[m7.group(1).lower()], int(m7.group(2)))
+            if res:
+                return res
+
+        m8 = re.search(r"\b(\d{1,2})[/\-](\d{1,2})\b", s)
+        if m8:
+            p1, p2 = int(m8.group(1)), int(m8.group(2))
+            if 1 <= p2 <= 12 and 1 <= p1 <= 31:
+                res = make_date(default_year, p2, p1)
+                if res:
+                    return res
 
     return None
 
@@ -285,6 +331,35 @@ class AnchorStatementParser:
 
     def __init__(self, log_fn=None):
         self.log = log_fn or (lambda x: None)
+
+    def _detect_dates_in_line(self, line, default_year=None):
+        found = []
+        consumed = set()
+        n = min(14, len(line))
+
+        idx = 0
+        while idx < n:
+            if idx in consumed:
+                idx += 1
+                continue
+
+            matched = False
+            for k in [3, 2, 1]:
+                if idx + k <= len(line):
+                    span_words = line[idx : idx + k]
+                    span_text = " ".join(w["text"].strip() for w in span_words)
+                    d = parse_date_flexible(span_text, default_year=default_year)
+                    if d:
+                        span_indices = set(range(idx, idx + k))
+                        found.append((d, span_text, span_indices))
+                        consumed.update(span_indices)
+                        idx += k
+                        matched = True
+                        break
+            if not matched:
+                idx += 1
+
+        return found
 
     def parse(
         self,
@@ -329,13 +404,9 @@ class AnchorStatementParser:
                 self.log("Detected reverse chronology (newest first). Inverting to chronological sequence...")
                 raw_txs.reverse()
 
-        # RECONCILE: PDF Bal prevails directly on every row
-        reconciled_rows, calculated_op_bal, running_math_bal = self._reconcile(raw_txs, effective_op_bal)
+        reconciled_rows, calculated_op_bal, running_math_bal, is_od_account = self._reconcile(raw_txs, effective_op_bal)
 
-        # -------------------------------------------------------------------------
-        # DEFINITIVE CLOSING BALANCE:
-        # If tool is able to extract PDF Bal, that bal SHALL PREVAIL with NO adjustment.
-        # -------------------------------------------------------------------------
+        # Unconditional PDF Balance Precedence
         last_extracted_pdf_bal = None
         for tx in reversed(raw_txs):
             if tx.get("bal") and tx["bal"] != 0.0:
@@ -352,11 +423,9 @@ class AnchorStatementParser:
             definitive_closing_bal = reconciled_rows[-1]["Bal"] if reconciled_rows else calculated_op_bal
 
         final_bal = definitive_closing_bal
-
         total_dr = sum(r["Dr"] for r in reconciled_rows[1:])
         total_cr = sum(r["Cr"] for r in reconciled_rows[1:])
 
-        # Determine verification match against target
         target_to_compare = expected_closing_bal if expected_closing_bal is not None else definitive_closing_bal
         diff = round(final_bal - target_to_compare, 2)
         closing_matches = abs(diff) <= 0.05
@@ -379,6 +448,7 @@ class AnchorStatementParser:
             "math_reconciled": math_reconciled,
             "diff": diff,
             "math_diff": math_diff,
+            "is_od_account": is_od_account,
         }
 
         return pd.DataFrame(reconciled_rows), verification_info
@@ -392,25 +462,29 @@ class AnchorStatementParser:
             lines = self._group_words_by_line(words)
 
             for line_idx, line in enumerate(lines):
-                detected_date = None
-                for i in range(min(5, len(line))):
-                    w_text = line[i]["text"].strip()
-                    d = parse_date_flexible(w_text)
-                    if d:
-                        detected_date = d
-                        break
-
+                dates_found = self._detect_dates_in_line(line, default_year=target_date.year)
+                detected_dates = [df_item[0] for df_item in dates_found]
                 has_decimals = any(extract_strict_decimal(w["text"]) > 0 for w in line[1:])
 
-                if detected_date and detected_date == target_date and has_decimals:
+                if target_date in detected_dates and has_decimals:
                     anchor_y = line[0]["top"]
 
                     header_words = []
+                    header_line_idx = None
                     for prev_idx in range(line_idx - 1, max(-1, line_idx - 15), -1):
                         prev_line = lines[prev_idx]
                         prev_str = " ".join([w["text"].lower() for w in prev_line])
                         if any(_match_keyword(prev_str, HEADER_KEYWORDS[k]) for k in ["dr", "cr", "bal", "particulars"]):
                             header_words.extend(prev_line)
+                            header_line_idx = prev_idx
+
+                    # Check if an Opening Balance row exists between the header and anchor
+                    if header_line_idx is not None:
+                        for mid_idx in range(header_line_idx + 1, line_idx):
+                            mid_text = " ".join(w["text"] for w in lines[mid_idx])
+                            if is_opening_balance_line(mid_text):
+                                anchor_y = lines[mid_idx][0]["top"]
+                                break
 
                     header_cols = self._build_header_intervals(header_words, page.width)
                     return True, page_idx, header_cols, anchor_y
@@ -419,7 +493,7 @@ class AnchorStatementParser:
 
     def _build_header_intervals(self, header_words, page_width):
         col_positions = {}
-        for key in ["date", "particulars", "chq_ref", "dr", "cr", "bal"]:
+        for key in ["val_date", "date", "particulars", "chq_ref", "dr", "cr", "bal"]:
             best_match = None
             for w in header_words:
                 if _match_keyword(w["text"], HEADER_KEYWORDS[key]):
@@ -435,7 +509,7 @@ class AnchorStatementParser:
         if "dr" not in col_positions:
             col_positions["dr"] = col_positions["cr"] - (page_width * 0.12)
         if "particulars" not in col_positions:
-            col_positions["particulars"] = col_positions["dr"] - (page_width * 0.25)
+            col_positions["particulars"] = min(col_positions["dr"], col_positions["cr"]) - (page_width * 0.25)
         if "date" not in col_positions:
             col_positions["date"] = page_width * 0.06
 
@@ -481,6 +555,11 @@ class AnchorStatementParser:
         cr_left, cr_right = header_cols.get("cr", (0, 0))
         bal_left, bal_right = header_cols.get("bal", (0, 0))
 
+        dr_center = (dr_left + dr_right) / 2
+        cr_center = (cr_left + cr_right) / 2
+        bal_center = (bal_left + bal_right) / 2
+        amount_col_left_boundary = min(dr_left, cr_left)
+
         for page_idx in range(start_page_idx - 1, len(pdf.pages)):
             if statement_ended:
                 break
@@ -500,27 +579,41 @@ class AnchorStatementParser:
                 if not line_full_text:
                     continue
 
-                # 1. Annexure / Statutory disclosure cutoff
+                # 1. Statutory Cutoff
                 if is_annexure_or_legend_line(line_full_text):
                     if len(raw_txs) > 0 or current_tx is not None:
                         statement_ended = True
                         break
                     continue
 
-                # 2. Extract decimal numbers and coordinates
+                # 2. Extract dates via sliding-window scanning
+                dates_found = self._detect_dates_in_line(line, default_year=default_year)
+                date_indices = set()
+                line_date = None
+                date_str = ""
+
+                if dates_found:
+                    line_date = dates_found[0][0]
+                    date_str = dates_found[0][1]
+                    for d_item in dates_found:
+                        date_indices.update(d_item[2])
+
+                # 3. Extract decimals and particulars tokens
                 decimal_items = []
                 particulars_tokens = []
 
-                for w in line:
+                for w_idx, w in enumerate(line):
                     val = extract_strict_decimal(w["text"])
                     mid_x = (w["x0"] + w["x1"]) / 2
                     if val > 0:
                         decimal_items.append((val, mid_x))
                     else:
-                        if mid_x < dr_left and not parse_date_flexible(w["text"], default_year=default_year):
+                        if w_idx in date_indices:
+                            continue
+                        if mid_x < amount_col_left_boundary:
                             particulars_tokens.append(w["text"])
 
-                # 3. Statement Summary / Grand Total rows
+                # 4. Total / Summary Row Handling
                 if is_total_summary_line(line_full_text, line, decimal_items):
                     if len(decimal_items) >= 1:
                         cl_cand = decimal_items[-1][0]
@@ -533,7 +626,7 @@ class AnchorStatementParser:
                         break
                     continue
 
-                # 4. Closing Balance balancing entries (e.g., By Balance c/d)
+                # 5. Balancing figures (Bal c/d)
                 if is_closing_balance_line(line_full_text):
                     if len(decimal_items) > 0:
                         cl_cand = decimal_items[0][0]
@@ -542,7 +635,7 @@ class AnchorStatementParser:
                             self.log(f"Captured Closing Balance from Bal c/d: ₹{cl_cand:,.2f}")
                     continue
 
-                # 5. Opening Balance / Balance b/d
+                # 6. Opening Balance / Balance b/d / BALANCE FORWARD
                 if is_opening_balance_line(line_full_text):
                     if len(decimal_items) > 0:
                         op_cand = decimal_items[-1][0]
@@ -551,7 +644,7 @@ class AnchorStatementParser:
                             self.log(f"Captured Opening Balance: ₹{op_cand:,.2f}")
                     continue
 
-                # 6. Filter footer text
+                # 7. Footers and page counts
                 if any(re.search(pat, line_full_text, re.IGNORECASE) for pat in FOOTER_AND_TOTAL_PATTERNS):
                     continue
 
@@ -561,43 +654,38 @@ class AnchorStatementParser:
 
                 if len(decimal_items) >= 3:
                     bal_val = decimal_items[-1][0]
-                    cr_val = decimal_items[-2][0]
-                    dr_val = decimal_items[-3][0]
+                    for amt, x_pos in decimal_items[:-1]:
+                        if abs(x_pos - dr_center) <= abs(x_pos - cr_center):
+                            dr_val = amt
+                        else:
+                            cr_val = amt
                 elif len(decimal_items) == 2:
                     bal_val = decimal_items[-1][0]
                     tx_amt, tx_x = decimal_items[-2]
-                    if abs(tx_x - ((dr_left + dr_right) / 2)) <= abs(tx_x - ((cr_left + cr_right) / 2)):
+                    if abs(tx_x - dr_center) <= abs(tx_x - cr_center):
                         dr_val = tx_amt
                     else:
                         cr_val = tx_amt
                 elif len(decimal_items) == 1:
                     amt, x_pos = decimal_items[0]
-                    if x_pos >= bal_left:
+                    d_bal = abs(x_pos - bal_center)
+                    d_dr = abs(x_pos - dr_center)
+                    d_cr = abs(x_pos - cr_center)
+
+                    if x_pos >= bal_left or (d_bal < d_dr and d_bal < d_cr):
                         bal_val = amt
-                    elif cr_left <= x_pos < cr_right:
-                        cr_val = amt
-                    elif dr_left <= x_pos < dr_right:
+                    elif d_dr <= d_cr:
                         dr_val = amt
                     else:
-                        bal_val = amt
+                        cr_val = amt
 
                 particulars_str = " ".join(particulars_tokens).strip()
-
-                line_date = None
-                date_str = ""
-                for w in line[:4]:
-                    d = parse_date_flexible(w["text"], default_year=default_year)
-                    if d:
-                        line_date = d
-                        date_str = w["text"]
-                        break
 
                 if line_date:
                     last_seen_date = line_date
                     last_seen_raw_date = date_str
 
                 has_movement = dr_val > 0 or cr_val > 0 or bal_val > 0
-
                 is_new_tx = False
                 tx_date_to_use = None
                 raw_date_to_use = ""
@@ -640,9 +728,9 @@ class AnchorStatementParser:
         output = []
         if not raw_txs:
             op = float(opening_bal) if opening_bal is not None else 0.0
-            return output, op, op
+            return output, op, op, False
 
-        # Determine account type: Standard (Cr adds, Dr subtracts) vs OD/CC (Dr adds, Cr subtracts)
+        # Determine account type: Standard vs Overdraft
         is_od_account = False
         for i in range(len(raw_txs) - 1):
             b1 = raw_txs[i].get("bal", 0.0)
@@ -697,16 +785,29 @@ class AnchorStatementParser:
             cr = tx["cr"]
             pdf_bal = tx["bal"]
 
-            # Compute theoretical running math
+            # Delta-Derived Recovery Logic: populate missing amounts from balance movements
+            if dr == 0.0 and cr == 0.0 and pdf_bal > 0 and prev_bal > 0:
+                diff = round(pdf_bal - prev_bal, 2)
+                if is_od_account:
+                    if diff > 0:
+                        dr = diff
+                    elif diff < 0:
+                        cr = abs(diff)
+                else:
+                    if diff > 0:
+                        cr = diff
+                    elif diff < 0:
+                        dr = abs(diff)
+                tx["dr"] = dr
+                tx["cr"] = cr
+
+            # Compute theoretical balance
             if is_od_account:
                 running_math_bal = round(running_math_bal + dr - cr, 2)
             else:
                 running_math_bal = round(running_math_bal - dr + cr, 2)
 
-            # -------------------------------------------------------------------------
-            # STRICT LOGIC: If tool is able to extract pdf bal, that bal SHALL PREVAIL
-            # in balance and NO adjustment!
-            # -------------------------------------------------------------------------
+            # Strict Rule: PDF Balance takes unconditional precedence
             if pdf_bal != 0.0:
                 row_bal = pdf_bal
                 math_diff = abs(round(running_math_bal - pdf_bal, 2))
@@ -736,15 +837,26 @@ class AnchorStatementParser:
             })
             prev_bal = row_bal
 
-        return output, float(opening_bal), running_math_bal
+        return output, float(opening_bal), running_math_bal, is_od_account
 
 
-def export_to_excel_styled(df, out_path: str, account_name: str = "", account_no: str = ""):
+def export_to_excel_styled(
+    df,
+    out_path: str,
+    account_name: str = "",
+    account_no: str = "",
+    is_od_account: bool = False,
+):
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
     import pandas as pd
 
-    with pd.ExcelWriter(out_path, engine="openpyxl", date_format="DD-MM-YYYY", datetime_format="DD-MM-YYYY") as writer:
+    with pd.ExcelWriter(
+        out_path,
+        engine="openpyxl",
+        date_format="DD-MM-YYYY",
+        datetime_format="DD-MM-YYYY",
+    ) as writer:
         start_row = 1
         if account_name or account_no:
             start_row = 4
@@ -772,15 +884,47 @@ def export_to_excel_styled(df, out_path: str, account_name: str = "", account_no
             top=Side(style="thin", color="D9D9D9"),
             bottom=Side(style="thin", color="D9D9D9"),
         )
+        total_border = Border(
+            top=Side(style="thin", color="000000"),
+            bottom=Side(style="double", color="000000"),
+            left=Side(style="thin", color="D9D9D9"),
+            right=Side(style="thin", color="D9D9D9"),
+        )
 
         header_row_idx = start_row
+        first_data_row = header_row_idx + 1
+        last_data_row = header_row_idx + len(df)
+
         for col_idx in range(1, len(df.columns) + 1):
             cell = ws.cell(row=header_row_idx, column=col_idx)
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        for row in ws.iter_rows(min_row=header_row_idx + 1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+        # Dynamic formula injection for running balances and audits
+        for r in range(first_data_row + 1, last_data_row + 1):
+            if is_od_account:
+                ws.cell(row=r, column=7, value=f"=G{r-1}+E{r}-F{r}")
+            else:
+                ws.cell(row=r, column=7, value=f"=G{r-1}-E{r}+F{r}")
+
+            ws.cell(
+                row=r,
+                column=9,
+                value=f'=IF(OR(H{r}="", H{r}=0), "VERIFIED", IF(ROUND(ABS(G{r}-H{r}), 2)<=0.05, "VERIFIED", "DIFF"))',
+            )
+            ws.cell(
+                row=r,
+                column=10,
+                value=f'=IF(I{r}="DIFF", "Math diff: " & TEXT(G{r}-H{r}, "#,##0.00"), "")',
+            )
+
+        for row in ws.iter_rows(
+            min_row=first_data_row,
+            max_row=last_data_row,
+            min_col=1,
+            max_col=ws.max_column,
+        ):
             for cell in row:
                 cell.border = thin_border
                 col_name = df.columns[cell.column - 1]
@@ -795,6 +939,24 @@ def export_to_excel_styled(df, out_path: str, account_name: str = "", account_no
                 elif col_name == "Particulars":
                     cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
+        # Summary Row
+        summary_row = last_data_row + 1
+        ws.cell(row=summary_row, column=4, value="TOTAL")
+        ws.cell(row=summary_row, column=5, value=f"=SUM(E{first_data_row+1}:E{last_data_row})")
+        ws.cell(row=summary_row, column=6, value=f"=SUM(F{first_data_row+1}:F{last_data_row})")
+        ws.cell(row=summary_row, column=7, value=f"=G{last_data_row}")
+
+        total_font = Font(name="Segoe UI", size=10, bold=True)
+        for c in range(1, len(df.columns) + 1):
+            cell = ws.cell(row=summary_row, column=c)
+            cell.border = total_border
+            cell.font = total_font
+            if c in [5, 6, 7]:
+                cell.number_format = "#,##0.00"
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            elif c == 4:
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+
         for col_idx, col_name in enumerate(df.columns, 1):
             col_letter = get_column_letter(col_idx)
             if col_name == "Particulars":
@@ -806,7 +968,7 @@ def export_to_excel_styled(df, out_path: str, account_name: str = "", account_no
             else:
                 ws.column_dimensions[col_letter].width = 15
 
-        ws.freeze_panes = ws.cell(row=header_row_idx + 1, column=1)
+        ws.freeze_panes = ws.cell(row=first_data_row, column=1)
 
 
 class StatementConverter:

@@ -6,12 +6,16 @@ __pycache__/
 venv/
 env/
 
-# PyInstaller build outputs
+# PyInstaller & Setup build outputs
 build/
 dist/
+dist_installer/
 *.spec
 
+# Local runtime & test logs
+conversion_history.json
 
+# Prevent accidental leak of private statements / exported ledgers
 *.pdf
 *.xlsx
 *.xls
