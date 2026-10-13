@@ -135,19 +135,13 @@ dist_installer/BankStatementConverter_Setup.exe
 ## Screenshots
 
 ### Main Application
-
 ![Main Application](main-window.png)
-<!-- Example: ![Main Application](screenshots/main-window.png) -->
 
 ### Conversion Process
-
-![Main Application](conversion-process.png)
-<!-- Example: ![Conversion Process](screenshots/conversion-process.png) -->
+![Conversion Process](conversion-process.png)
 
 ### Standardized Excel Output
-
-<!-- Add your Excel screenshot here -->
-<!-- Example: ![Excel Output](screenshots/excel-output.png) -->
+![Excel Output](excel-output.png)
 
 ---
 
