@@ -1,10 +1,8 @@
-; Inno Setup Script for Bank Statement Converter
-
 [Setup]
 AppId={{8E4F1823-99B7-4D93-9F9B-2E0F2B0759AA}
 AppName=Bank Statement Converter
-AppVersion=1.0.1
-AppPublisher=Open Source Community
+AppVersion=1.1.0
+AppPublisher=Batata
 DefaultDirName={autopf}\Bank Statement Converter
 DefaultGroupName=Bank Statement Converter
 OutputDir=dist_installer
