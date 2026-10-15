@@ -1,26 +1,52 @@
-# Python cache
+# Byte-compiled / optimized / Python object files
 __pycache__/
 *.py[cod]
+*$py.class
 
-# Environments
+# C extensions
+*.so
+
+# Virtual environments
+.venv/
 venv/
 env/
+ENV/
+env.bak/
+venv.bak/
 
-# PyInstaller & Setup build outputs
+# PyInstaller & build artifacts
 build/
 dist/
 dist_installer/
 *.spec
 
-# Local runtime & test logs
+# Bundled local OCR binaries (do not track heavy Tesseract executables/models)
+Tesseract-OCR/
+
+# Application runtime cache & history
 conversion_history.json
 
-# Prevent accidental leak of private statements / exported ledgers
+# Local bank statement PDFs & converted Excel ledgers (data privacy)
 *.pdf
 *.xlsx
 *.xls
 *.csv
+BS samples/
+BS%20samples/
 
-# Editor settings
+# IDE & editor configurations
 .vscode/
 .idea/
+*.sublime-project
+*.sublime-workspace
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS system files (if ever accessed across platforms)
+.DS_Store
+.AppleDouble
+.LSOverride
