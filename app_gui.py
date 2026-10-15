@@ -16,7 +16,7 @@ from optimizer import (
 )
 
 # Apply Windows XP high-DPI scaling and AppUserModelID before window creation
-setup_windows_environment("app.bankstatementconverter.1.0")
+setup_windows_environment("sharva.bankstatementconverter.1.0")
 
 # Classic Windows XP Palette
 XP_BG = "#ECE9D8"
@@ -33,8 +33,8 @@ class App:
   def __init__(self, root):
     self.root = root
     self.root.title("Bank Statement to Excel Converter")
-    self.root.geometry("1040x670")
-    self.root.minsize(980, 610)
+    self.root.geometry("1040x680")
+    self.root.minsize(980, 620)
     self.root.configure(bg=XP_BG)
 
     self._icon_img = None
@@ -52,6 +52,7 @@ class App:
     self.first_tx_date = tk.StringVar()
     self.opening_bal = tk.StringVar()
     self.closing_bal = tk.StringVar()
+    self.is_scanned = tk.BooleanVar(value=False)
 
     self._build_ui()
     self._load_history()
@@ -106,7 +107,7 @@ class App:
     main = tk.Frame(self.root, bg=XP_BG, padx=8, pady=8)
     main.pack(fill=tk.BOTH, expand=True)
 
-    # Split: Left (Converter & Log), Right (History)
+    # Split Panes: Converter Controls (Left), Recent Conversions (Right)
     left_pane = tk.Frame(main, bg=XP_BG)
     left_pane.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
 
@@ -144,6 +145,21 @@ class App:
     self._make_entry(
         f_group, self.pdf_password, width=16, show="*"
     ).grid(row=1, column=1, sticky="w", padx=4, pady=2)
+
+    chk_scan = tk.Checkbutton(
+        f_group,
+        text="Scanned / Image PDF (Enable OCR-BETA)",
+        variable=self.is_scanned,
+        font=XP_FONT_BOLD,
+        bg=XP_BG,
+        fg=XP_TEXT,
+        activebackground=XP_BG,
+        selectcolor="#FFFFFF",
+    )
+    chk_scan.grid(
+        row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(4, 2)
+    )
+
     f_group.columnconfigure(1, weight=1)
 
     # 2. Calibration Anchors Group
@@ -400,9 +416,6 @@ class App:
 
     self.progress = ttk.Progressbar(status_bar, mode="indeterminate", length=130)
 
-  # ----------------------------------------------------
-  # CLEAR / RESET HANDLER
-  # ----------------------------------------------------
   def _clear_all(self):
     self.pdf_path.set("")
     self.out_path.set("")
@@ -412,6 +425,7 @@ class App:
     self.closing_bal.set("")
     self.account_name.set("")
     self.account_no.set("")
+    self.is_scanned.set(False)
 
     self.verdict_label.config(
         text="Reconciliation Verdict: Ready", fg="#444444"
@@ -424,9 +438,6 @@ class App:
     self.log_box.delete("1.0", tk.END)
     self.status_text.config(text="Ready")
 
-  # ----------------------------------------------------
-  # HISTORY DATA HELPERS
-  # ----------------------------------------------------
   def _load_history(self):
     for item in self.hist_tree.get_children():
       self.hist_tree.delete(item)
@@ -437,7 +448,7 @@ class App:
     try:
       with open(self.history_file, "r", encoding="utf-8") as f:
         data = json.load(f)
-      for entry in data[-40:]:  # Load up to 40 recent entries
+      for entry in data[-40:]:
         self.hist_tree.insert(
             "",
             0,
@@ -471,7 +482,7 @@ class App:
         records = []
 
     records.append(entry)
-    records = records[-50:]  # Preserve last 50 runs
+    records = records[-50:]
 
     try:
       with open(self.history_file, "w", encoding="utf-8") as f:
@@ -545,6 +556,7 @@ class App:
     pw = self.pdf_password.get().strip() or None
     acc_name = self.account_name.get().strip()
     acc_no = self.account_no.get().strip()
+    scanned_flag = self.is_scanned.get()
 
     if not pdf or not os.path.exists(pdf):
       messagebox.showerror("Error", "Please select a valid PDF file.")
@@ -563,14 +575,16 @@ class App:
 
     self.btn.config(state=tk.DISABLED)
     self.btn_clear.config(state=tk.DISABLED)
-    self.status_text.config(text="Processing statement...")
+    self.status_text.config(
+        text="Processing statement (OCR)..." if scanned_flag else "Processing statement..."
+    )
     self.progress.pack(side=tk.RIGHT, padx=2, pady=1)
     self.progress.start(10)
     self.log_box.delete("1.0", tk.END)
 
     self.verdict_label.config(text="Processing...", fg="#000080")
     self.verdict_sub.config(
-        text="Parsing PDF tables and reconciling running balances..."
+        text="Scanning pages with OCR..." if scanned_flag else "Parsing PDF tables and reconciling running balances..."
     )
 
     threading.Thread(
@@ -584,6 +598,7 @@ class App:
             expected_cl_bal,
             acc_name,
             acc_no,
+            scanned_flag,
         ),
         daemon=True,
     ).start()
@@ -598,6 +613,7 @@ class App:
       expected_cl_bal,
       acc_name,
       acc_no,
+      scanned_flag,
   ):
     pdf_base = os.path.basename(pdf)
     try:
@@ -608,6 +624,7 @@ class App:
           first_tx_date=date_input,
           opening_bal=op_bal,
           expected_closing_bal=expected_cl_bal,
+          is_scanned=scanned_flag,
       )
 
       if df.empty:
@@ -695,13 +712,13 @@ class App:
             )
         else:
           self.verdict_label.config(
-            text=f"Verdict: Complete ({tx_count} Transactions)", fg="#000080"
+              text=f"Verdict: Complete ({tx_count} Transactions)", fg="#000080"
           )
           self.verdict_sub.config(
-            text=(
-                f"Final Balance: {final_bal:,.2f}   |   Expected: Not"
-                " Provided"
-            )
+              text=(
+                  f"Final Balance: {final_bal:,.2f}   |   Expected: Not"
+                  " Provided"
+              )
           )
           messagebox.showinfo(
               "Complete",
