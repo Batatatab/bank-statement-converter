@@ -1,0 +1,13 @@
+# PDF parsing and coordinate extraction
+pdfplumber>=0.11.0
+
+# Data manipulation and Excel generation
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# OCR and image preprocessing (BETA feature)
+pytesseract>=0.3.10
+Pillow>=10.0.0
+
+# Windows executable compilation
+pyinstaller>=6.0.0
