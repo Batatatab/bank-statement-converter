@@ -30,6 +30,90 @@ Built with a classic Windows XP Luna-inspired interface (`#ECE9D8`), the applica
 5. **Review the Results:** Check the verification status in the application or open the generated workbook to inspect the extracted data and formulas.
 
 ---
+## Core Architecture & Reconciliation Logic
+
+The converter uses a deterministic, audit-first pipeline to transform unstructured, borderless bank statement PDFs into structured Excel ledgers with formula-based balance verification. The objective is to preserve extracted transaction data, handle inconsistent PDF layouts, and minimize cumulative rounding errors.
+
+1. **Multi-Token Sliding-Window Date Parsing**
+
+Traditional regex parsers can fail when banks render dates as separate text tokens across horizontal coordinates (e.g., "16 Jun 19").
+
+- Sliding-Window Detection: Evaluates dynamic token spans of 3, 2, and 1 tokens to identify dates split across PDF text elements.
+- Supported Date Formats:
+  - Alphanumeric: "DD Mon YY", "DD Month YYYY", "Mon DD, YYYY"
+  - Numeric: "DD/MM/YYYY", "DD-MM-YYYY", "DD.MM.YY"
+  - ISO-style: "YYYY-MM-DD", "YYYY/MM/DD"
+  - Space-separated: "DD MM YYYY"
+- Token Isolation: Identified date tokens are removed from the remaining description stream to prevent dates from leaking into transaction particulars.
+
+2. **Continuation-Line Fusion & Phantom Row Elimination**
+
+Bank statements often wrap transaction descriptions and numerical values across multiple PDF text lines without repeating the transaction date.
+
+- Anchor Locking: A new transaction record is created only when a valid transaction date is detected.
+- Continuation Fusion: Lines without a valid transaction date are treated as continuations of the active transaction.
+- Description Reconstruction: Continuation text is appended to "particulars_parts" in the order it appears.
+- Numeric Field Recovery: Wrapped or trailing numerical values are merged into the active transaction's missing fields instead of creating separate zero-balance or phantom rows.
+
+3. **Delta-Balance Movement Authority ("Δ PDF Bal")**
+
+The engine uses the bank's printed running balance as an independent reference for validating transaction amounts and identifying column misalignment.
+
+For consecutive valid transactions:
+
+"Δ PDF Bal = Current PDF Balance - Previous PDF Balance"
+
+- Column Drift Correction: When the absolute balance movement matches the maximum of the extracted debit and credit amounts, the sign of the balance movement determines the likely transaction direction:
+  - Negative delta → Debit ("Dr")
+  - Positive delta → Credit ("Cr")
+- Missing Amount Recovery: If both extracted debit and credit amounts are zero, the transaction magnitude and direction can be recovered from the balance movement.
+- Extracted Value Precedence: If the extracted amount conflicts with the balance movement, the original extracted amount is preserved. The row is marked "DIFF", and the variance is recorded in the warning column rather than silently overwriting the source value.
+
+4. **Global Statistical Account Classification**
+
+Savings and current accounts generally follow standard balance movement, while overdraft (OD) and cash credit (CC) accounts follow the opposite relationship.
+
+Instead of classifying an account based on a single transaction, the engine evaluates consecutive transaction pairs across the statement.
+
+- Majority-Vote Consensus: An account is classified as OD/CC only when at least three verified transitions are available and the number of OD-consistent matches exceeds the number of standard-account matches.
+- Outlier Resistance: Isolated reversals, bank adjustments, and unusual transactions are less likely to cause incorrect classification of the entire statement.
+- Consistent Balance Logic: The resulting account classification determines the running-balance formula used in the exported workbook.
+
+5. **Dynamic Formula Injection & Live Auditability**
+
+The exported Excel workbook is generated using "openpyxl" and includes live formulas instead of relying exclusively on static calculated values.
+
+Running Balance — Column G
+
+For standard accounts:
+
+`=G{r-1}-E{r}+F{r}`
+
+For OD/CC accounts:
+
+`=G{r-1}+E{r}-F{r}`
+
+PDF Balance — Column H
+
+Stores the extracted running balance from the source PDF as a fixed reference for verification.
+
+Audit Status — Column I
+
+`=IF(OR(H{r}="",H{r}=0),"VERIFIED",IF(ROUND(ABS(G{r}-H{r}),2)<=0.05,"VERIFIED","DIFF"))`
+
+The formula compares the calculated running balance against the extracted PDF balance, allowing a tolerance of "0.05".
+
+Discrepancy Warning — Column J
+
+`=IF(I{r}="DIFF","Math diff: "&TEXT(G{r}-H{r},"#,##0.00"),"")`
+When a row is marked "DIFF", the warning column displays the difference between the calculated and extracted balances.
+
+Summary & Accounting Double-Underline
+- Debit and credit totals are calculated dynamically using "SUM" formulas.
+- The final running balance is linked to the last transaction row.
+- Changes to debit or credit values automatically propagate through subsequent running balances and audit checks.
+- Accounting-style double underlining is applied to relevant summary totals.
+This structure provides a transparent audit trail in which extracted balances remain available for independent comparison against formula-calculated balances.
 
 ## Excel Output & Audit Columns
 
