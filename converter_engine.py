@@ -386,6 +386,7 @@ class AnchorStatementParser:
       first_tx_date_str: str = "",
       opening_bal: float = None,
       expected_closing_bal: float = None,
+      is_scanned: bool = False,
   ):
     import pandas as pd
     import pdfplumber
@@ -399,13 +400,44 @@ class AnchorStatementParser:
     with pdfplumber.open(
         pdf_path, password=password if password else None
     ) as pdf:
+      pages_to_process = pdf.pages
+
+      # 1. OCR scanned pages if option is checked
+      if is_scanned:
+        from ocr_engine import ScannedPDFProcessor
+
+        self.log("Scanned PDF mode enabled. Initializing OCR engine...")
+        ocr_proc = ScannedPDFProcessor(dpi=300, log_fn=self.log)
+        ocr_pages = []
+        for idx, p in enumerate(pdf.pages, start=1):
+          self.log(f"Running OCR on Page {idx}/{len(pdf.pages)}...")
+          ocr_pages.append(ocr_proc.process_page(p))
+        pages_to_process = ocr_pages
+
       self.log(
-          f"Opened PDF: {len(pdf.pages)} pages. Locating anchor:"
+          f"Opened PDF: {len(pages_to_process)} pages. Locating anchor:"
           f" {target_date.strftime('%d-%m-%Y')}..."
       )
 
+      # 2. Check for explicit OD/CC indicators in statement text
+      has_explicit_od_tag = False
+      for p in pages_to_process[:2]:
+        p_txt = (
+            p.extract_text()
+            if hasattr(p, "extract_text") and p.extract_text()
+            else " ".join(w["text"] for w in p.extract_words())
+        )
+        if re.search(
+            r"\b(?:OVERDRAFT|CASH\s*CREDIT|OD\s*ACCOUNT|CC\s*ACCOUNT|LINE\s*OF\s*CREDIT)\b",
+            p_txt,
+            re.IGNORECASE,
+        ):
+          has_explicit_od_tag = True
+          break
+
+      # 3. Locate anchor and extract transactions using pages_to_process
       anchor_found, anchor_page_idx, header_cols, anchor_y = (
-          self._locate_anchor_and_headers(pdf, target_date)
+          self._locate_anchor_and_headers(pages_to_process, target_date)
       )
       if not anchor_found:
         raise ValueError(
@@ -419,7 +451,11 @@ class AnchorStatementParser:
       )
       raw_txs, in_table_op_bal, in_table_cl_bal = (
           self._extract_all_transactions_borderless(
-              pdf, anchor_page_idx, anchor_y, header_cols, target_date.year
+              pages_to_process,
+              anchor_page_idx,
+              anchor_y,
+              header_cols,
+              target_date.year,
           )
       )
 
@@ -430,7 +466,6 @@ class AnchorStatementParser:
       effective_op_bal = in_table_op_bal
       self.log(f"Adopted in-table Opening Balance: ₹{effective_op_bal:,.2f}")
 
-    # Reverse chronological sequence handling
     parsed_dates = [tx["date_obj"] for tx in raw_txs if tx.get("date_obj")]
     if len(parsed_dates) >= 2:
       desc_count = sum(
@@ -451,7 +486,7 @@ class AnchorStatementParser:
         raw_txs.reverse()
 
     reconciled_rows, calculated_op_bal, running_math_bal, is_od_account = (
-        self._reconcile(raw_txs, effective_op_bal)
+        self._reconcile(raw_txs, effective_op_bal, has_explicit_od_tag)
     )
 
     last_extracted_pdf_bal = None
@@ -509,8 +544,8 @@ class AnchorStatementParser:
 
     return pd.DataFrame(reconciled_rows), verification_info
 
-  def _locate_anchor_and_headers(self, pdf, target_date):
-    for page_idx, page in enumerate(pdf.pages, start=1):
+  def _locate_anchor_and_headers(self, pages, target_date):
+    for page_idx, page in enumerate(pages, start=1):
       words = page.extract_words(x_tolerance=2, y_tolerance=2)
       if not words:
         continue
@@ -617,7 +652,7 @@ class AnchorStatementParser:
     return lines
 
   def _extract_all_transactions_borderless(
-      self, pdf, start_page_idx, start_y, header_cols, default_year
+      self, pages, start_page_idx, start_y, header_cols, default_year
   ):
     raw_txs = []
     current_tx = None
@@ -635,11 +670,11 @@ class AnchorStatementParser:
     bal_center = (bal_left + bal_right) / 2
     amount_col_left_boundary = min(dr_left, cr_left)
 
-    for page_idx in range(start_page_idx - 1, len(pdf.pages)):
+    for page_idx in range(start_page_idx - 1, len(pages)):
       if statement_ended:
         break
 
-      page = pdf.pages[page_idx]
+      page = pages[page_idx]
       words = page.extract_words(x_tolerance=2, y_tolerance=2)
       if not words:
         continue
@@ -684,7 +719,6 @@ class AnchorStatementParser:
           else:
             if w_idx in date_indices:
               continue
-            # Universal particulars assignment (supports particulars on left or far right)
             if part_left > 0 or part_right > 0:
               if part_left <= mid_x <= part_right:
                 particulars_tokens.append(w["text"])
@@ -781,7 +815,6 @@ class AnchorStatementParser:
               "bal": bal_val,
           }
         elif current_tx:
-          # Continuation line fusion (prevents phantom rows)
           if current_tx["bal"] == 0.0 and bal_val > 0:
             current_tx["bal"] = bal_val
           if current_tx["dr"] == 0.0 and dr_val > 0:
@@ -805,35 +838,21 @@ class AnchorStatementParser:
     return raw_txs, in_table_op_bal, in_table_cl_bal
 
   def _reconcile(
-      self, raw_txs: list[dict], opening_bal: float | None, tol: float = 0.05
+      self,
+      raw_txs: list[dict],
+      opening_bal: float | None,
+      has_explicit_od_tag: bool = False,
+      tol: float = 0.05,
   ):
     output = []
     if not raw_txs:
       op = float(opening_bal) if opening_bal is not None else 0.0
       return output, op, op, False
 
-    # Majority-vote account classification
-    std_matches = 0
-    od_matches = 0
-
-    for i in range(len(raw_txs) - 1):
-      b1 = raw_txs[i].get("bal", 0.0)
-      b2 = raw_txs[i + 1].get("bal", 0.0)
-      if b1 != 0.0 and b2 != 0.0:
-        delta = round(b2 - b1, 2)
-        dr2 = raw_txs[i + 1].get("dr", 0.0)
-        cr2 = raw_txs[i + 1].get("cr", 0.0)
-
-        if abs(delta - (cr2 - dr2)) <= tol:
-          std_matches += 1
-        if abs(delta - (dr2 - cr2)) <= tol:
-          od_matches += 1
-
-    is_od_account = (od_matches > std_matches) and (od_matches >= 3)
+    is_od_account = bool(has_explicit_od_tag)
     self.log(
-        "Account structure:"
+        "Account classification:"
         f" {'OVERDRAFT (OD/CC)' if is_od_account else 'STANDARD SAVINGS/CURRENT'}"
-        f" (std={std_matches}, od={od_matches})"
     )
 
     if opening_bal is None:
@@ -842,13 +861,19 @@ class AnchorStatementParser:
       f_dr = first_tx["dr"]
       f_cr = first_tx["cr"]
 
-      if f_bal > 0:
+      f_amt = max(f_dr, f_cr)
+      if f_bal > 0 and f_amt > 0:
         if is_od_account:
-          opening_bal = round(f_bal - f_dr + f_cr, 2)
+          opening_bal = round(
+              f_bal - f_amt if f_dr > f_cr else f_bal + f_amt, 2
+          )
         else:
-          opening_bal = round(f_bal + f_dr - f_cr, 2)
+          if f_cr >= f_dr:
+            opening_bal = round(f_bal - f_amt, 2)
+          else:
+            opening_bal = round(f_bal + f_amt, 2)
       else:
-        opening_bal = 0.0
+        opening_bal = f_bal if f_bal > 0 else 0.0
 
       self.log(
           f"Auto-calculated Opening Balance from Tx #1: ₹{opening_bal:,.2f}"
@@ -883,7 +908,6 @@ class AnchorStatementParser:
       warning_msg = ""
       status = "VERIFIED"
 
-      # Delta calculated strictly from source PDF balances
       has_pdf_delta = pdf_bal > 0.0 and prev_pdf_bal > 0.0
       pdf_delta = round(pdf_bal - prev_pdf_bal, 2) if has_pdf_delta else None
 
@@ -904,14 +928,13 @@ class AnchorStatementParser:
           delta_mag = abs(pdf_delta)
 
           if abs(extracted_mag - delta_mag) <= tol:
-            if (expected_dr > 0 and dr == 0.0 and cr > 0) or (
-                expected_cr > 0 and cr == 0.0 and dr > 0
+            dr = expected_dr
+            cr = expected_cr
+            if (expected_dr > 0 and extracted_dr == 0) or (
+                expected_cr > 0 and extracted_cr == 0
             ):
-              dr = expected_dr
-              cr = expected_cr
               warning_msg = "Orientation aligned to PDF Bal Δ"
           else:
-            # Extracted amount prevails; flag variance against PDF delta
             warning_msg = (
                 f"Review: Extracted (Dr {dr:,.2f}, Cr {cr:,.2f}) != PDF Δ"
                 f" ({pdf_delta:+,.2f})"
@@ -923,12 +946,6 @@ class AnchorStatementParser:
 
       if pdf_bal > 0.0:
         row_bal = pdf_bal
-        if has_pdf_delta and status != "DIFF":
-          expected_movement = (cr - dr) if not is_od_account else (dr - cr)
-          if abs(pdf_delta - expected_movement) <= tol:
-            status = "VERIFIED"
-          else:
-            status = "DIFF"
         prev_pdf_bal = pdf_bal
       else:
         if not is_od_account:
@@ -1139,12 +1156,14 @@ class StatementConverter:
       first_tx_date: str = "",
       opening_bal: float = None,
       expected_closing_bal: float = None,
+      is_scanned: bool = False,
   ):
     parser = AnchorStatementParser(log_fn=self.log)
     return parser.parse(
-      pdf_path,
-      password=password,
-      first_tx_date_str=first_tx_date,
-      opening_bal=opening_bal,
-      expected_closing_bal=expected_closing_bal,
+        pdf_path,
+        password=password,
+        first_tx_date_str=first_tx_date,
+        opening_bal=opening_bal,
+        expected_closing_bal=expected_closing_bal,
+        is_scanned=is_scanned,
     )
